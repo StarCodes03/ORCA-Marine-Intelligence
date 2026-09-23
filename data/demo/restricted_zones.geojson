@@ -1,0 +1,57 @@
+{
+  "type": "FeatureCollection",
+  "name": "Kochi_Restricted_Marine_Zones_Demo",
+  "metadata": {
+    "source": "DEMO_GIS_DATA",
+    "description": "Demonstration restricted maritime zones off Cochin Port and Southern Naval Command.",
+    "is_mock": true
+  },
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "zone_id": "RESTRICTED-SNC-01",
+        "name": "Cochin Naval Base & Port Channel Security Enclave",
+        "category": "Defense / Heavy Shipping Channel",
+        "restriction_level": "NO_FISHING_ZONE",
+        "authority": "Southern Naval Command / Cochin Port Trust (Simulated)",
+        "source": "DEMO_GIS_DATA"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [76.2000, 9.9400],
+            [76.2500, 9.9400],
+            [76.2550, 9.9850],
+            [76.2050, 9.9850],
+            [76.2000, 9.9400]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "zone_id": "RESTRICTED-LNG-02",
+        "name": "Puthuvype LNG Terminal Maritime Safety Zone",
+        "category": "Hazardous Industrial / Maritime Buffer",
+        "restriction_level": "RESTRICTED_NAVIGATION",
+        "authority": "Directorate General of Shipping (Simulated)",
+        "source": "DEMO_GIS_DATA"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [76.2100, 9.9950],
+            [76.2400, 9.9950],
+            [76.2400, 10.0250],
+            [76.2100, 10.0250],
+            [76.2100, 9.9950]
+          ]
+        ]
+      }
+    }
+  ]
+}

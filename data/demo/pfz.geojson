@@ -1,0 +1,74 @@
+{
+  "type": "FeatureCollection",
+  "name": "Kochi_Arabian_Sea_PFZ_Demo",
+  "metadata": {
+    "source": "DEMO_GIS_DATA",
+    "description": "Demonstration Potential Fishing Zones (PFZ) derived from simulated satellite SST and Chlorophyll fronts off Kochi, Kerala.",
+    "is_mock": true
+  },
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "pfz_id": "PFZ-KL-001",
+        "name": "Chellanam Offshore PFZ",
+        "latitude": 9.8000,
+        "longitude": 76.1000,
+        "bearing_deg": 222,
+        "depth_m": 35.0,
+        "sst_c": 28.2,
+        "chlorophyll_mg_m3": 0.85,
+        "target_species": "Indian Oil Sardine, Indian Mackerel",
+        "validity_hours": 36,
+        "confidence_score": 0.88,
+        "source": "DEMO_GIS_DATA"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [76.1000, 9.8000]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "pfz_id": "PFZ-KL-002",
+        "name": "Vypin Deepwater PFZ",
+        "latitude": 10.0500,
+        "longitude": 75.9800,
+        "bearing_deg": 293,
+        "depth_m": 48.0,
+        "sst_c": 27.9,
+        "chlorophyll_mg_m3": 1.12,
+        "target_species": "Yellowfin Tuna, Coastal Trevally",
+        "validity_hours": 24,
+        "confidence_score": 0.92,
+        "source": "DEMO_GIS_DATA"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [75.9800, 10.0500]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "pfz_id": "PFZ-KL-003",
+        "name": "Munambam Shoal PFZ",
+        "latitude": 10.1800,
+        "longitude": 76.0500,
+        "bearing_deg": 331,
+        "depth_m": 28.0,
+        "sst_c": 28.5,
+        "chlorophyll_mg_m3": 0.78,
+        "target_species": "Squid, Anchovy",
+        "validity_hours": 48,
+        "confidence_score": 0.81,
+        "source": "DEMO_GIS_DATA"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [76.0500, 10.1800]
+      }
+    }
+  ]
+}
