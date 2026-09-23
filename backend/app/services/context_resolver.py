@@ -201,6 +201,7 @@ class ContextResolver:
         intent: str
         required_agents: List[str]
         clarification_reason: Optional[str] = None
+        compare_windows: Optional[List[str]] = None
 
         # Scenario 1: Referent distance query ("How far is it?")
         if is_referent_distance_query and not any(k in text_lower for k in KNOWN_LOCATIONS):
@@ -227,6 +228,34 @@ class ContextResolver:
             activity = "navigation"
             if location is None:
                 location = LocationCoords(name="Kochi", latitude=9.9312, longitude=76.2673)
+
+        # Scenario 1c: Temporal Condition Comparison ("Is morning or afternoon better?", "How will conditions change tomorrow?")
+        elif bool(
+            re.search(r"\b(morning\s+(or|vs|and)\s+afternoon|afternoon\s+(or|vs|and)\s+morning)\b", text_lower) or
+            re.search(r"\b(today\s+(or|vs|and)\s+tomorrow|tomorrow\s+(or|vs|and)\s+today)\b", text_lower) or
+            re.search(r"\b(is|which\s+is)\s+(morning|afternoon)\s+better\b", text_lower) or
+            re.search(r"\b(how\s+will\s+conditions\s+change|will\s+conditions\s+improve)\b", text_lower) or
+            re.search(r"\b(compare\s+(conditions|morning|afternoon|today|tomorrow))\b", text_lower) or
+            ("രാവിലെയാണോ" in text_lower or "ഉച്ചയ്ക്കാണോ" in text_lower or "ഇന്ന് vs നാളെ" in text_lower) or
+            (p_intent in ["marine_safety", "weather_query", "temporal_comparison"] and re.search(r"\b(is\s+afternoon\s+better|is\s+morning\s+better)\b", text_lower))
+        ):
+            intent = "temporal_comparison"
+            required_agents = ["weather", "ocean"]
+            if location is None:
+                location = LocationCoords(name="Kochi", latitude=9.9312, longitude=76.2673)
+
+            # Determine window pairs
+            if ("today" in text_lower and "tomorrow" in text_lower) or "change tomorrow" in text_lower or "improve tomorrow" in text_lower:
+                compare_windows = ["current", "tomorrow_morning"]
+            elif "afternoon" in text_lower and ("morning" in text_lower or (p_win and "morning" in p_win)):
+                d_prefix = date or p_date or "tomorrow"
+                compare_windows = [f"{d_prefix}_morning", f"{d_prefix}_afternoon"]
+            elif "morning" in text_lower and (p_win and "afternoon" in p_win):
+                d_prefix = date or p_date or "tomorrow"
+                compare_windows = [f"{d_prefix}_afternoon", f"{d_prefix}_morning"]
+            else:
+                d_prefix = date or p_date or "tomorrow"
+                compare_windows = [f"{d_prefix}_morning", f"{d_prefix}_afternoon"]
 
         # Scenario 2: "What if I go toward the nearest PFZ?"
         elif is_pfz_referent and any(w in text_lower for w in ["go", "head", "sail", "safe", "what if"]):
@@ -299,6 +328,7 @@ class ContextResolver:
             vessel_type=vessel_type,
             language_mode=language_mode,
             required_agents=required_agents,
+            compare_windows=compare_windows,
             clarification_reason=clarification_reason
         )
 
@@ -314,6 +344,8 @@ class ContextResolver:
             last_intent=intent if intent != "clarification_needed" else p_intent,
             selected_pfz=p_pfz,
             active_route=p_route,
+            temporal_comparison=prior_context.temporal_comparison if prior_context else None,
+            route_risk=prior_context.route_risk if prior_context else None,
             turn_count=turn_count + 1
         )
 

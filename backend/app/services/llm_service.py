@@ -123,7 +123,9 @@ class LLMService:
         selected_pfz: Optional[Dict[str, Any]] = None,
         transit_route: Optional[Dict[str, Any]] = None,
         vessel_type: Optional[str] = None,
-        language_mode: str = "bilingual"
+        language_mode: str = "bilingual",
+        temporal_comparison: Optional[Dict[str, Any]] = None,
+        route_risk: Optional[Dict[str, Any]] = None
     ) -> str:
         """Synthesize final conversational response following the prompt specification."""
         if intent == "clarification_needed":
@@ -259,6 +261,26 @@ class LLMService:
                 if weather.get("weather_alert"):
                     lines.append(f"• ⚠️ Alert: {weather.get('weather_alert')}")
 
+        elif intent == "temporal_comparison":
+            lines.append(f"Comparative marine condition analysis for {loc_name}:")
+            lines.append("")
+            if temporal_comparison:
+                tc = temporal_comparison
+                w1 = tc.get("window_1", {})
+                w2 = tc.get("window_2", {})
+                w1_title = str(w1.get("time_window", "Window 1")).replace("_", " ").title()
+                w2_title = str(w2.get("time_window", "Window 2")).replace("_", " ").title()
+                lines.append(f"**Multi-Window Comparison ({w1_title} vs. {w2_title}):**")
+                lines.append(f"• Wind Speed: {w1.get('wind_speed_kmh')} km/h ➔ {w2.get('wind_speed_kmh')} km/h (Δ: {tc.get('delta_wind_kmh'):+} km/h)")
+                lines.append(f"• Wave Height: {w1.get('wave_height_m')} m ({w1.get('sea_state')}) ➔ {w2.get('wave_height_m')} m ({w2.get('sea_state')}) (Δ: {tc.get('delta_wave_m'):+} m)")
+                lines.append(f"• Rain Probability: {w1.get('rain_probability')}% ➔ {w2.get('rain_probability')}% (Δ: {tc.get('delta_rain_pct'):+}%)")
+                lines.append(f"• Assessed Risk Score: {w1.get('risk_score')} ({w1.get('risk_level')}) ➔ {w2.get('risk_score')} ({w2.get('risk_level')}) (Δ: {tc.get('delta_risk_score'):+0.1f})")
+                lines.append(f"• Trend Classification: **{tc.get('trend')}**")
+                lines.append("")
+                lines.append(f"**Deterministic Recommendation:** {tc.get('recommendation')}")
+                lines.append("")
+                lines.append(f"> *Provenance:* {tc.get('provenance_notice')}")
+
         elif intent == "safe_passage_route":
             lines.append(f"Safe passage corridor analysis for {loc_name} ({time_display}):")
             lines.append("")
@@ -302,7 +324,7 @@ class LLMService:
             if transit_route.get("geofence_avoidance_applied") and avoided:
                 lines.append(f"• Geofence Avoidance: **ACTIVE** — Corridor diverted around {', '.join(avoided)}.")
             else:
-                lines.append("• Geofence Avoidance: Direct line-of-sight clear.")
+                lines.append("• Geofence Avoidance: Direct route clear of restricted zones.")
 
             wps = transit_route.get("waypoints", [])
             if wps:
@@ -313,6 +335,20 @@ class LLMService:
                     wp_name = wp.get("name") if isinstance(wp, dict) else wp.name
                     wp_desc = wp.get("description", "") if isinstance(wp, dict) else getattr(wp, "description", "")
                     lines.append(f"  - **{wp_name}**: ({wp_lat}, {wp_lon}) — {wp_desc}")
+
+            # Prototype Route Risk Index Breakdown (M5)
+            if route_risk:
+                rr = route_risk
+                fb = rr.get("factor_breakdown", {})
+                lines.append("")
+                lines.append(f"**Prototype Route Risk Index: {rr.get('prototype_route_risk_index')}/10 ({rr.get('risk_level')})**")
+                lines.append(f"• Dominant Limiting Factor: {str(rr.get('limiting_factor', '')).replace('_', ' ').title()}")
+                lines.append("• Factor Breakdown (0–10 scale contributions):")
+                lines.append(f"  - Environmental Risk (at origin): {fb.get('environmental_factor', 0.0)}")
+                lines.append(f"  - Vessel Stress Factor: {fb.get('vessel_stress_factor', 0.0)} (wave ratio: {rr.get('wave_stress_ratio')}, wind ratio: {rr.get('wind_stress_ratio')})")
+                lines.append(f"  - Distance Exposure Factor: {fb.get('distance_exposure_factor', 0.0)}")
+                lines.append(f"  - Geofence Interaction: {fb.get('geofence_interaction_factor', 0.0)}")
+                lines.append(f"> *Route Risk Notice:* {rr.get('disclaimer')}")
 
             if transit_route.get("fuel_estimate_note"):
                 lines.append(f"> *Fuel & Transit Notice:* {transit_route.get('fuel_estimate_note')}")
@@ -328,6 +364,10 @@ class LLMService:
             lines.append(f"• {geospatial.get('source', 'DEMO_GIS_DATA')}")
         if transit_route:
             lines.append("• GEOMETRIC_ROUTING_ENGINE")
+        if route_risk:
+            lines.append("• PROTOTYPE_ROUTE_RISK_ENGINE (DERIVED_CALCULATION)")
+        if temporal_comparison:
+            lines.append("• TEMPORAL_REASONING_ENGINE (DERIVED_CALCULATION)")
         lines.append("• RULE_BASED_RISK_ENGINE")
 
         lines.append("")
@@ -349,7 +389,9 @@ class LLMService:
         geospatial: Optional[Dict[str, Any]] = None,
         risk: Optional[Dict[str, Any]] = None,
         transit_route: Optional[Dict[str, Any]] = None,
-        vessel_type: Optional[str] = None
+        vessel_type: Optional[str] = None,
+        temporal_comparison: Optional[Dict[str, Any]] = None,
+        route_risk: Optional[Dict[str, Any]] = None
     ) -> str:
         """Synthesize authentic coastal Kerala Malayalam operational advisory."""
         loc_name = location.get("name", "കൊച്ചി") if location else "കൊച്ചി"
@@ -390,6 +432,26 @@ class LLMService:
             if weather and weather.get("rain_probability") is not None:
                 lines.append(f"• മഴ സാധ്യത: **{weather.get('rain_probability')}%**")
 
+        if temporal_comparison:
+            tc = temporal_comparison
+            w1 = tc.get("window_1", {})
+            w2 = tc.get("window_2", {})
+            w1_name = str(w1.get("time_window", "")).replace("_", " ")
+            w2_name = str(w2.get("time_window", "")).replace("_", " ")
+            trend_ml = {
+                "STABLE": "സ്ഥിരതയാർന്ന അവസ്ഥ (STABLE)",
+                "IMPROVING": "മെച്ചപ്പെടുന്ന കടൽാവസ്ഥ (IMPROVING)",
+                "DETERIORATING": "പ്രക്ഷുബ്ധമാകുന്ന കടൽാവസ്ഥ (DETERIORATING)",
+                "INDETERMINATE": "വ്യത്യസ്ത വ്യതിയാനങ്ങൾ (INDETERMINATE)"
+            }.get(tc.get("trend"), tc.get("trend"))
+            lines.append("")
+            lines.append(f"**സമയപരിധി താരതമ്യം ({w1_name} vs. {w2_name}):**")
+            lines.append(f"• പ്രവണത: **{trend_ml}**")
+            lines.append(f"• തിരമാല വ്യതിയാനം (Δ): **{tc.get('delta_wave_m'):+} മീറ്റർ**")
+            lines.append(f"• കാറ്റിന്റെ വേഗത വ്യതിയാനം (Δ): **{tc.get('delta_wind_kmh'):+} കി.മീ/മണിക്കൂർ**")
+            lines.append(f"• അപകടസാധ്യത വ്യതിയാനം (Δ): **{tc.get('delta_risk_score'):+0.1f}**")
+            lines.append(f"• നിർദ്ദേശം: {tc.get('recommendation')}")
+
         if vessel_type:
             v_prof = get_vessel_profile(vessel_type)
             if v_prof:
@@ -415,6 +477,13 @@ class LLMService:
             if transit_route.get("geofence_avoidance_applied"):
                 avoided_str = ", ".join(transit_route.get("avoided_zones", []))
                 lines.append(f"• സുരക്ഷാ ക്രമീകരണം: നിരോധിത മേഖല ({avoided_str}) വഴിതിരിച്ചുവിട്ടു ({transit_route.get('clearance_buffer_km')} കി.മീ സുരക്ഷിത അകലം).")
+
+        if route_risk:
+            rr = route_risk
+            lines.append("")
+            lines.append(f"**റൂട്ട് റിസ്ക് സൂചിക (പ്രോട്ടോടൈപ്പ്): {rr.get('prototype_route_risk_index')}/10 ({rr.get('risk_level')})**")
+            lines.append(f"• മുഖ്യ ഘടകം: {str(rr.get('limiting_factor', '')).replace('_', ' ')}")
+            lines.append("> *ശ്രദ്ധിക്കുക: റൂട്ട് റിസ്ക് സൂചിക പരീക്ഷണാർത്ഥമുള്ള പ്രോട്ടോടൈപ്പ് മാതൃക മാത്രമാണ്; ഔദ്യോഗിക സുരക്ഷാ റേറ്റിംഗല്ല.*")
 
         if geospatial and geospatial.get("nearest_pfz"):
             npfz = geospatial["nearest_pfz"]

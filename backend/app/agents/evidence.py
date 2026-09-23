@@ -15,7 +15,9 @@ from app.models.schemas import (
     PlannerOutput,
     EvidenceItem,
     ConversationContext,
-    TransitRoute
+    TransitRoute,
+    TemporalComparisonResult,
+    RouteRiskAssessment
 )
 from app.services.llm_service import llm_service
 
@@ -38,7 +40,9 @@ class EvidenceAgent:
         geospatial: Optional[GeospatialData] = None,
         risk: Optional[RiskAssessment] = None,
         context: Optional[ConversationContext] = None,
-        transit_route: Optional[TransitRoute] = None
+        transit_route: Optional[TransitRoute] = None,
+        temporal_comparison: Optional[TemporalComparisonResult] = None,
+        route_risk: Optional[RouteRiskAssessment] = None
     ) -> Dict[str, Any]:
         """Produce structured evidence breakdown and final conversational message."""
         logger.info(f"[{self.AGENT_NAME}] Synthesizing multi-agent outputs.")
@@ -238,7 +242,7 @@ class EvidenceAgent:
             avoidance_claim = (
                 f"Corridor diverted around {', '.join(transit_route.avoided_zones)} with {transit_route.clearance_buffer_km} km buffer"
                 if transit_route.geofence_avoidance_applied and transit_route.avoided_zones
-                else f"Direct line-of-sight clear ({transit_route.clearance_buffer_km} km buffer)"
+                else f"Direct route clear of restricted zones ({transit_route.clearance_buffer_km} km buffer)"
             )
             evidence_items.append(EvidenceItem(
                 category="calculated",
@@ -252,7 +256,34 @@ class EvidenceAgent:
                 raw_data=transit_route.model_dump()
             ))
 
-        # 6. Conversational response generation with language mode handling
+        # 6. Temporal comparison evidence
+        if temporal_comparison:
+            evidence_items.append(EvidenceItem(
+                category="derived_calculation",
+                claim=(
+                    f"Temporal comparison between {temporal_comparison.window_1.time_window} and {temporal_comparison.window_2.time_window}: "
+                    f"Overall trend '{temporal_comparison.trend}', recommendation '{temporal_comparison.recommendation}'. "
+                    f"Provenance: {temporal_comparison.provenance_notice}"
+                ),
+                source="TEMPORAL_REASONING_ENGINE",
+                raw_data=temporal_comparison.model_dump()
+            ))
+
+        # 7. Prototype Route Risk Index evidence
+        if route_risk:
+            evidence_items.append(EvidenceItem(
+                category="rule_evaluation",
+                claim=(
+                    f"Prototype Route Risk Index: {route_risk.prototype_route_risk_index}/10 ({route_risk.risk_level}). "
+                    f"Dominant limiting factor: {route_risk.limiting_factor}. "
+                    f"Evaluation point: ({route_risk.evaluation_point.latitude:.4f}, {route_risk.evaluation_point.longitude:.4f}). "
+                    f"Notice: {route_risk.disclaimer}"
+                ),
+                source="PROTOTYPE_ROUTE_RISK_ENGINE",
+                raw_data=route_risk.model_dump()
+            ))
+
+        # 8. Conversational response generation with language mode handling
         lang_mode = planner_plan.language_mode or (context.language_mode if context else "bilingual")
         v_type = planner_plan.vessel_type or (context.vessel_type if context else (risk.vessel_type if risk else None))
 
@@ -266,7 +297,9 @@ class EvidenceAgent:
             risk=risk.model_dump() if risk else None,
             transit_route=transit_route.model_dump() if transit_route else None,
             vessel_type=v_type,
-            language_mode=lang_mode
+            language_mode=lang_mode,
+            temporal_comparison=temporal_comparison.model_dump() if temporal_comparison else None,
+            route_risk=route_risk.model_dump() if route_risk else None
         )
 
         final_answer_ml = self.llm.synthesize_malayalam_advisory(
@@ -278,7 +311,9 @@ class EvidenceAgent:
             geospatial=geospatial.model_dump() if geospatial else None,
             risk=risk.model_dump() if risk else None,
             transit_route=transit_route.model_dump() if transit_route else None,
-            vessel_type=v_type
+            vessel_type=v_type,
+            temporal_comparison=temporal_comparison.model_dump() if temporal_comparison else None,
+            route_risk=route_risk.model_dump() if route_risk else None
         )
 
         if lang_mode == "malayalam":

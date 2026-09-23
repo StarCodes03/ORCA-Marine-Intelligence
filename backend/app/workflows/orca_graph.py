@@ -23,7 +23,10 @@ from app.models.schemas import (
     LocationCoords,
     EvidenceItem,
     ConversationContext,
-    TransitRoute
+    TransitRoute,
+    TemporalComparisonResult,
+    RouteRiskAssessment,
+    TimeWindowMetrics
 )
 from app.agents.planner import PlannerAgent
 from app.agents.weather import WeatherAgent
@@ -31,6 +34,8 @@ from app.agents.ocean import OceanAgent
 from app.agents.geospatial import GeospatialAgent
 from app.agents.risk import RiskAssessmentAgent
 from app.agents.evidence import EvidenceAgent
+from app.tools.temporal_reasoning import TemporalReasoningEngine
+from app.tools.route_risk import RouteRiskCalculator
 from app.services.conversation_store import conversation_store
 
 logger = logging.getLogger("orca.workflow")
@@ -48,10 +53,14 @@ class OrcaState(TypedDict, total=False):
     # Agent Artifacts
     planner_plan: Optional[Dict[str, Any]]
     weather_data: Optional[Dict[str, Any]]
+    weather_data_w2: Optional[Dict[str, Any]]
     ocean_data: Optional[Dict[str, Any]]
+    ocean_data_w2: Optional[Dict[str, Any]]
     geospatial_data: Optional[Dict[str, Any]]
     risk_assessment: Optional[Dict[str, Any]]
     transit_route: Optional[Dict[str, Any]]
+    temporal_comparison: Optional[Dict[str, Any]]
+    route_risk: Optional[Dict[str, Any]]
     evidence_items: Optional[List[Dict[str, Any]]]
     conversation_context: Optional[Dict[str, Any]]
     
@@ -63,13 +72,15 @@ class OrcaState(TypedDict, total=False):
     final_answer_ml: Optional[str]
 
 
-# Agent instances
+# Agent and engine instances
 planner_agent = PlannerAgent()
 weather_agent = WeatherAgent()
 ocean_agent = OceanAgent()
 geospatial_agent = GeospatialAgent()
 risk_agent = RiskAssessmentAgent()
 evidence_agent = EvidenceAgent()
+temporal_engine = TemporalReasoningEngine()
+route_risk_calculator = RouteRiskCalculator()
 
 
 def planner_node(state: OrcaState) -> OrcaState:
@@ -113,10 +124,22 @@ def weather_node(state: OrcaState) -> OrcaState:
         time_range=time_range
     )
 
-    return {
+    result: OrcaState = {
         "weather_data": weather_data.model_dump(),
         "agent_trace": trace
     }
+
+    # If comparing windows, fetch second window
+    compare_windows = plan_dict.get("compare_windows")
+    if compare_windows and len(compare_windows) >= 2:
+        w2_time_range = compare_windows[1]
+        weather_data_w2 = weather_agent.execute(
+            location=loc_coords,
+            time_range=w2_time_range
+        )
+        result["weather_data_w2"] = weather_data_w2.model_dump()
+
+    return result
 
 
 def ocean_node(state: OrcaState) -> OrcaState:
@@ -136,10 +159,22 @@ def ocean_node(state: OrcaState) -> OrcaState:
         time_range=time_range
     )
 
-    return {
+    result: OrcaState = {
         "ocean_data": ocean_data.model_dump(),
         "agent_trace": trace
     }
+
+    # If comparing windows, fetch second window
+    compare_windows = plan_dict.get("compare_windows")
+    if compare_windows and len(compare_windows) >= 2:
+        w2_time_range = compare_windows[1]
+        ocean_data_w2 = ocean_agent.execute(
+            location=loc_coords,
+            time_range=w2_time_range
+        )
+        result["ocean_data_w2"] = ocean_data_w2.model_dump()
+
+    return result
 
 
 def geospatial_node(state: OrcaState) -> OrcaState:
@@ -181,7 +216,7 @@ def geospatial_node(state: OrcaState) -> OrcaState:
 
 
 def risk_node(state: OrcaState) -> OrcaState:
-    """Execute RiskAssessmentAgent with vessel seaworthiness profiling."""
+    """Execute RiskAssessmentAgent with vessel seaworthiness profiling and M5 deterministic reasoning."""
     trace = list(state.get("agent_trace", []))
     trace.append(risk_agent.AGENT_NAME)
 
@@ -200,10 +235,69 @@ def risk_node(state: OrcaState) -> OrcaState:
         vessel_type=vessel_type
     )
 
-    return {
+    result: OrcaState = {
         "risk_assessment": assessment.model_dump(),
         "agent_trace": trace
     }
+
+    # Location coordinates for evaluation point
+    if plan_dict.get("location"):
+        loc_coords = LocationCoords(**plan_dict["location"])
+    elif ctx_dict.get("location"):
+        loc_coords = LocationCoords(**ctx_dict["location"])
+    else:
+        loc_coords = LocationCoords(name="Kochi", latitude=9.9312, longitude=76.2673)
+
+    # 1. Deterministic Temporal Reasoning if comparing windows
+    compare_windows = plan_dict.get("compare_windows")
+    if compare_windows and len(compare_windows) >= 2 and state.get("weather_data_w2") and state.get("ocean_data_w2"):
+        w1_name = compare_windows[0]
+        w2_name = compare_windows[1]
+        weather_w2 = WeatherData(**state["weather_data_w2"])
+        ocean_w2 = OceanData(**state["ocean_data_w2"])
+        assessment_w2 = risk_agent.assess(
+            weather=weather_w2,
+            ocean=ocean_w2,
+            geospatial=None,
+            vessel_type=vessel_type
+        )
+        if weather_obj and ocean_obj:
+            m1 = temporal_engine.extract_window_metrics(
+                time_window=w1_name,
+                weather=weather_obj,
+                ocean=ocean_obj,
+                risk_score=assessment.risk_score,
+                risk_level=assessment.risk_level
+            )
+            m2 = temporal_engine.extract_window_metrics(
+                time_window=w2_name,
+                weather=weather_w2,
+                ocean=ocean_w2,
+                risk_score=assessment_w2.risk_score,
+                risk_level=assessment_w2.risk_level
+            )
+            comp_result = temporal_engine.compare_time_windows(
+                evaluation_point=loc_coords,
+                window_1=m1,
+                window_2=m2
+            )
+            result["temporal_comparison"] = comp_result.model_dump()
+
+    # 2. Deterministic Prototype Route Risk Index
+    transit_route_data = state.get("transit_route") or (ctx_dict.get("active_route") if ctx_dict else None)
+    if transit_route_data:
+        route_obj = TransitRoute(**transit_route_data)
+        route_risk = route_risk_calculator.assess_route_risk(
+            origin=loc_coords,
+            transit_route=route_obj,
+            weather=weather_obj,
+            ocean=ocean_obj,
+            risk_assessment=assessment,
+            vessel_type=vessel_type
+        )
+        result["route_risk"] = route_risk.model_dump()
+
+    return result
 
 
 def evidence_node(state: OrcaState) -> OrcaState:
@@ -218,6 +312,13 @@ def evidence_node(state: OrcaState) -> OrcaState:
     risk_obj = RiskAssessment(**state["risk_assessment"]) if state.get("risk_assessment") else None
     route_obj = TransitRoute(**state["transit_route"]) if state.get("transit_route") else None
 
+    # M5 models
+    temp_comp_data = state.get("temporal_comparison")
+    temporal_comp_obj = TemporalComparisonResult(**temp_comp_data) if temp_comp_data else None
+
+    route_risk_data = state.get("route_risk")
+    route_risk_obj = RouteRiskAssessment(**route_risk_data) if route_risk_data else None
+
     ctx_dict = state.get("conversation_context")
     context_obj = ConversationContext(**ctx_dict) if ctx_dict else None
 
@@ -228,11 +329,17 @@ def evidence_node(state: OrcaState) -> OrcaState:
         geospatial=geo_obj,
         risk=risk_obj,
         context=context_obj,
-        transit_route=route_obj
+        transit_route=route_obj,
+        temporal_comparison=temporal_comp_obj,
+        route_risk=route_risk_obj
     )
 
     # Persist updated conversation context to session store
     if context_obj:
+        if temporal_comp_obj:
+            context_obj.temporal_comparison = temporal_comp_obj
+        if route_risk_obj:
+            context_obj.route_risk = route_risk_obj
         conversation_store.save_context(context_obj)
 
     return {
@@ -241,6 +348,8 @@ def evidence_node(state: OrcaState) -> OrcaState:
         "evidence_items": [item.model_dump() for item in synth["evidence"]],
         "conversation_context": context_obj.model_dump() if context_obj else None,
         "transit_route": route_obj.model_dump() if route_obj else None,
+        "temporal_comparison": temporal_comp_obj.model_dump() if temporal_comp_obj else None,
+        "route_risk": route_risk_obj.model_dump() if route_risk_obj else None,
         "agent_trace": trace
     }
 
@@ -280,9 +389,12 @@ def route_from_ocean(state: OrcaState) -> str:
     """Route after ocean telemetry."""
     plan = state.get("planner_plan", {})
     req = plan.get("required_agents", [])
+    intent = plan.get("intent", "marine_safety")
 
     if "geospatial" in req:
         return "geospatial_node"
+    if intent == "temporal_comparison" or plan.get("compare_windows"):
+        return "risk_node"
     return "evidence_node"
 
 
@@ -341,6 +453,7 @@ def build_orca_graph():
         route_from_ocean,
         {
             "geospatial_node": "geospatial_node",
+            "risk_node": "risk_node",
             "evidence_node": "evidence_node",
         }
     )

@@ -19,7 +19,9 @@ from app.models.schemas import (
     EvidenceItem,
     ConversationContext,
     TransitRoute,
-    VesselProfile
+    VesselProfile,
+    TemporalComparisonResult,
+    RouteRiskAssessment
 )
 from app.config.risk_thresholds import get_vessel_profile
 from app.workflows.orca_graph import orca_graph
@@ -83,6 +85,16 @@ def handle_chat(request: ChatRequest):
         ocean = OceanData(**final_state["ocean_data"]) if final_state.get("ocean_data") else None
         geospatial = GeospatialData(**final_state["geospatial_data"]) if final_state.get("geospatial_data") else None
         transit_route = TransitRoute(**final_state["transit_route"]) if final_state.get("transit_route") else None
+        temporal_comparison = (
+            TemporalComparisonResult(**final_state["temporal_comparison"])
+            if final_state.get("temporal_comparison")
+            else None
+        )
+        route_risk = (
+            RouteRiskAssessment(**final_state["route_risk"])
+            if final_state.get("route_risk")
+            else None
+        )
 
         ctx_dict = final_state.get("conversation_context")
         context = ConversationContext(**ctx_dict) if ctx_dict else None
@@ -113,6 +125,8 @@ def handle_chat(request: ChatRequest):
             geospatial=geospatial,
             transit_route=transit_route,
             vessel_profile=vessel_profile,
+            temporal_comparison=temporal_comparison,
+            route_risk=route_risk,
             evidence=evidence_list,
             agent_trace=final_state.get("agent_trace", []),
             spatial_features=spatial_features,

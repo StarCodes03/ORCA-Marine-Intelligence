@@ -23,6 +23,7 @@ class PlannerOutput(BaseModel):
     required_agents: List[str] = Field(
         default_factory=lambda: ["weather", "ocean", "geospatial"]
     )
+    compare_windows: Optional[List[str]] = None
     clarification_reason: Optional[str] = None
 
 
@@ -176,6 +177,46 @@ class TransitRoute(BaseModel):
     fuel_estimate_note: str = ""
 
 
+class TimeWindowMetrics(BaseModel):
+    time_window: str
+    wind_speed_kmh: float
+    wind_direction_deg: float
+    wave_height_m: float
+    sea_state: str
+    rain_probability: float
+    risk_score: float
+    risk_level: str
+    source_weather: str
+    source_ocean: str
+
+
+class TemporalComparisonResult(BaseModel):
+    evaluation_point: LocationCoords
+    window_1: TimeWindowMetrics
+    window_2: TimeWindowMetrics
+    delta_wind_kmh: float
+    delta_wave_m: float
+    delta_rain_pct: float
+    delta_risk_score: float
+    trend: str  # IMPROVING, DETERIORATING, STABLE, INDETERMINATE
+    recommendation: str
+    tolerances_applied: Dict[str, float] = Field(default_factory=dict)
+    provenance_notice: str = "Derived calculation comparing forecast horizons at evaluation point."
+
+
+class RouteRiskAssessment(BaseModel):
+    prototype_route_risk_index: float  # 0.0 - 10.0
+    risk_level: str                    # LOW, MODERATE, HIGH, CRITICAL
+    evaluation_point: LocationCoords
+    vessel_type: Optional[str] = None
+    wave_stress_ratio: float
+    wind_stress_ratio: float
+    factor_breakdown: Dict[str, float] = Field(default_factory=dict)
+    limiting_factor: str
+    reasons: List[str] = Field(default_factory=list)
+    disclaimer: str
+
+
 class ConversationContext(BaseModel):
     conversation_id: str
     location: Optional[LocationCoords] = None
@@ -187,6 +228,8 @@ class ConversationContext(BaseModel):
     last_intent: Optional[str] = None
     selected_pfz: Optional[NearestPFZ] = None
     active_route: Optional[TransitRoute] = None
+    temporal_comparison: Optional[TemporalComparisonResult] = None
+    route_risk: Optional[RouteRiskAssessment] = None
     turn_count: int = 0
     updated_at: Optional[str] = None
 
@@ -211,6 +254,8 @@ class ChatResponse(BaseModel):
     geospatial: Optional[GeospatialData] = None
     transit_route: Optional[TransitRoute] = None
     vessel_profile: Optional[VesselProfile] = None
+    temporal_comparison: Optional[TemporalComparisonResult] = None
+    route_risk: Optional[RouteRiskAssessment] = None
     evidence: List[EvidenceItem] = Field(default_factory=list)
     agent_trace: List[str] = Field(default_factory=list)
     spatial_features: Optional[Dict[str, Any]] = None

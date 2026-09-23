@@ -135,3 +135,26 @@ def get_vessel_profile(vessel_type: Optional[str]) -> Optional[Dict[str, Any]]:
     key = str(vessel_type).lower().strip()
     return VESSEL_PROFILES.get(key)
 
+
+# Prototype Route Risk Index Parameters (M5)
+# Configurable weights and prototype decision-support disclaimer
+PROTOTYPE_ROUTE_RISK_CONFIG: Dict[str, Any] = {
+    "weight_env": 0.35,          # Environmental conditions at evaluation point
+    "weight_vessel": 0.25,       # Vessel stress ratios
+    "weight_dist": 0.20,         # Route distance exposure
+    "weight_geom": 0.20,         # Geofence intersection & corridor avoidance
+    "disclaimer": (
+        "Prototype Route Risk Index (0–10) is a configurable prototype decision-support metric; "
+        "NOT an official maritime safety rating, seaworthiness certification, or regulatory navigation limit."
+    )
+}
+
+# Temporal Comparison Tolerance Thresholds (M5)
+# Configurable deltas below which conditions are classified as STABLE
+TEMPORAL_TOLERANCES: Dict[str, float] = {
+    "wave_delta_m": 0.15,        # |delta_wave| <= 0.15 m considered stable
+    "wind_delta_kmh": 3.0,       # |delta_wind| <= 3.0 km/h considered stable
+    "rain_delta_pct": 10.0,      # |delta_rain| <= 10.0% considered stable
+    "risk_score_delta": 0.5,     # |delta_score| <= 0.5 considered stable
+}
+
