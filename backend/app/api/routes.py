@@ -194,36 +194,50 @@ def handle_chat(request: ChatRequest):
             else (context.pfz_comparison if context and context.pfz_comparison else None)
         )
 
-        # Spatial features bundle for instant map visualization
-        spatial_features = {
-            "user_location": location.model_dump() if location else None,
-            "nearest_pfz": geospatial.nearest_pfz.model_dump() if geospatial and geospatial.nearest_pfz else None,
-            "all_pfzs": [pfz.model_dump() for pfz in geospatial.all_pfzs] if geospatial else [],
-            "candidate_pfzs": [pfz.model_dump() for pfz in candidate_pfzs],
-            "pfz_comparison": pfz_comparison.model_dump() if pfz_comparison else None,
-            "restricted_zone_status": geospatial.restricted_zone_check.model_dump() if geospatial else None,
-            "route": transit_route.geojson_feature if transit_route else None
-        }
+        # Determine if query was conversational greeting, unsupported domain, or early clarification
+        intent = planner_plan.get("intent", "marine_safety")
+        is_conversational_or_unsupported = intent in [
+            "conversational_greeting",
+            "unsupported",
+            "clarification_needed"
+        ]
 
-        # Deterministic alert evaluation
-        vessel_lat = location.latitude if location else (request.user_latitude or 9.9312)
-        vessel_lon = location.longitude if location else (request.user_longitude or 76.2673)
-        wave_height = ocean.wave_height_m if ocean else None
-        wind_speed = weather.wind_speed_kmh if weather else None
-        route_pts = None
-        if transit_route and transit_route.waypoints:
-            route_pts = [(wp.latitude, wp.longitude) for wp in transit_route.waypoints]
+        if is_conversational_or_unsupported:
+            spatial_features = None
+            detected_alerts = []
+            if intent in ["conversational_greeting", "unsupported"]:
+                location = None
+        else:
+            # Spatial features bundle for instant map visualization
+            spatial_features = {
+                "user_location": location.model_dump() if location else None,
+                "nearest_pfz": geospatial.nearest_pfz.model_dump() if geospatial and geospatial.nearest_pfz else None,
+                "all_pfzs": [pfz.model_dump() for pfz in geospatial.all_pfzs] if geospatial else [],
+                "candidate_pfzs": [pfz.model_dump() for pfz in candidate_pfzs],
+                "pfz_comparison": pfz_comparison.model_dump() if pfz_comparison else None,
+                "restricted_zone_status": geospatial.restricted_zone_check.model_dump() if geospatial else None,
+                "route": transit_route.geojson_feature if transit_route else None
+            }
 
-        detected_alerts = alert_engine.evaluate_all(
-            vessel_lat=vessel_lat,
-            vessel_lon=vessel_lon,
-            vessel_type=v_type,
-            wave_height_m=wave_height,
-            wind_speed_kmh=wind_speed,
-            route_waypoints=route_pts,
-            conversation_id=cid,
-            persist=True
-        )
+            # Deterministic alert evaluation
+            vessel_lat = location.latitude if location else (request.user_latitude or 9.9312)
+            vessel_lon = location.longitude if location else (request.user_longitude or 76.2673)
+            wave_height = ocean.wave_height_m if ocean else None
+            wind_speed = weather.wind_speed_kmh if weather else None
+            route_pts = None
+            if transit_route and transit_route.waypoints:
+                route_pts = [(wp.latitude, wp.longitude) for wp in transit_route.waypoints]
+
+            detected_alerts = alert_engine.evaluate_all(
+                vessel_lat=vessel_lat,
+                vessel_lon=vessel_lon,
+                vessel_type=v_type,
+                wave_height_m=wave_height,
+                wind_speed_kmh=wind_speed,
+                route_waypoints=route_pts,
+                conversation_id=cid,
+                persist=True
+            )
 
         # Persist conversation turn
         storage_repo.save_message(

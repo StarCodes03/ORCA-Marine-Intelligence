@@ -176,3 +176,62 @@ def test_kochi_demo_query_exact_score_breakdown(risk_agent):
     # Check that sum of contributions equals total_score exactly
     contrib_sum = sum(f.contribution for f in assessment.score_breakdown.factors)
     assert contrib_sum == 8.5
+
+
+def test_risk_score_scale_and_representation_consistency(risk_agent):
+    """Verify that RiskAssessmentAgent produces scores strictly on a 0.0 - 10.0 scale,
+    matching frontend representation (Score X/10) and RISK_LEVEL_CUTOFFS:
+    - LOW: 0.0 - 3.0
+    - MODERATE: 3.1 - 6.0
+    - HIGH: 6.1 - 9.0
+    - CRITICAL: > 9.0 (bounded at 10.0)
+    """
+    from app.config.risk_thresholds import RISK_LEVEL_CUTOFFS
+
+    # 1. Zero risk baseline
+    w_calm = WeatherData(source="MOCK", location="Kochi", forecast_time="now", wind_speed_kmh=5.0, rain_probability=0.0, lightning_risk="low")
+    o_calm = OceanData(source="MOCK", location="Kochi", sst_c=28.0, wave_height_m=0.4, sea_state="calm", tide="steady")
+    g_calm = GeospatialData(source="MOCK", user_location=LocationCoords(name="Kochi", latitude=9.93, longitude=76.26), restricted_zone_check=RestrictedZoneCheck())
+
+    a_calm = risk_agent.assess(weather=w_calm, ocean=o_calm, geospatial=g_calm)
+    assert a_calm.risk_score == 0.0
+    assert a_calm.risk_level == "LOW"
+    assert a_calm.score_breakdown.total_score == 0.0
+
+    # 2. Moderate risk range (3.1 - 6.0)
+    w_mod = WeatherData(source="MOCK", location="Kochi", forecast_time="now", wind_speed_kmh=26.0, rain_probability=50.0, lightning_risk="low")
+    o_mod = OceanData(source="MOCK", location="Kochi", sst_c=28.0, wave_height_m=1.6, sea_state="moderate", tide="steady")
+    # wind (2.5) + rain (0.5) + wave (2.0) = 5.0
+    a_mod = risk_agent.assess(weather=w_mod, ocean=o_mod, geospatial=g_calm)
+    assert 3.0 < a_mod.risk_score <= 6.0
+    assert a_mod.risk_level == "MODERATE"
+    assert a_mod.risk_score == 5.0
+
+    # 3. High risk range (6.1 - 9.0)
+    # Demo condition: wind 32 (2.5) + rain 65 (0.5) + lightning moderate (2.0) + wave 1.8 (2.0) + buffer (1.5) = 8.5
+    g_near = GeospatialData(
+        source="MOCK",
+        user_location=LocationCoords(name="Kochi", latitude=9.93, longitude=76.26),
+        restricted_zone_check=RestrictedZoneCheck(restricted_zone_nearby=True, distance_to_nearest_zone_km=2.1, zone_name="Naval Enclave")
+    )
+    w_high = WeatherData(source="MOCK", location="Kochi", forecast_time="now", wind_speed_kmh=32.0, rain_probability=65.0, lightning_risk="moderate")
+    o_high = OceanData(source="MOCK", location="Kochi", sst_c=28.0, wave_height_m=1.8, sea_state="moderate", tide="steady")
+    a_high = risk_agent.assess(weather=w_high, ocean=o_high, geospatial=g_near)
+    assert 6.0 < a_high.risk_score <= 9.0
+    assert a_high.risk_level == "HIGH"
+    assert a_high.risk_score == 8.5
+
+    # 4. Extreme catastrophic conditions: inside restricted zone (8.0) + dangerous wave (4.0) + gale wind (3.0)
+    # Raw sum = 15.0, but bounded to [0.0, 10.0] for 0-10 representation
+    g_inside = GeospatialData(
+        source="MOCK",
+        user_location=LocationCoords(name="Kochi", latitude=9.93, longitude=76.26),
+        restricted_zone_check=RestrictedZoneCheck(inside_restricted_zone=True, zone_name="Naval Base")
+    )
+    w_gale = WeatherData(source="MOCK", location="Kochi", forecast_time="now", wind_speed_kmh=45.0, rain_probability=90.0, lightning_risk="severe")
+    o_storm = OceanData(source="MOCK", location="Kochi", sst_c=28.0, wave_height_m=3.5, sea_state="rough", tide="steady")
+    a_extreme = risk_agent.assess(weather=w_gale, ocean=o_storm, geospatial=g_inside)
+    assert a_extreme.risk_level == "CRITICAL"
+    assert a_extreme.risk_score == 10.0  # Mathematically bounded to 10.0
+    assert a_extreme.score_breakdown.total_score == 10.0
+

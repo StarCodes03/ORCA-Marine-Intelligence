@@ -136,22 +136,73 @@ class OpenMeteoMarineAdapter:
 
         time_key = time_range.lower().replace(" ", "_")
 
-        if time_key in ["current", "now", "today"]:
+        if time_key in ["current", "now"]:
             return 0
 
+        # Day 1 (Today)
+        if time_key in ["today", "today_morning"]:
+            for target_hour in ["T08:00", "T06:00", "T07:00", "T09:00"]:
+                for idx, t in enumerate(times[:24]):
+                    if target_hour in t:
+                        return idx
+            return min(len(times) - 1, 8)
+
+        if time_key == "today_afternoon":
+            for target_hour in ["T14:00", "T12:00", "T13:00", "T15:00"]:
+                for idx, t in enumerate(times[:24]):
+                    if target_hour in t:
+                        return idx
+            return min(len(times) - 1, 14)
+
+        if time_key == "today_evening":
+            for target_hour in ["T18:00", "T17:00", "T19:00", "T20:00"]:
+                for idx, t in enumerate(times[:24]):
+                    if target_hour in t:
+                        return idx
+            return min(len(times) - 1, 18)
+
+        if time_key == "today_night":
+            for target_hour in ["T22:00", "T21:00", "T23:00"]:
+                for idx, t in enumerate(times[:24]):
+                    if target_hour in t:
+                        return idx
+            return min(len(times) - 1, 22)
+
+        # Day 2 (Tomorrow)
         if time_key in ["tomorrow_morning", "tomorrow"]:
             for target_hour in ["T08:00", "T06:00", "T07:00", "T09:00"]:
-                for idx, t in enumerate(times):
-                    if idx >= 20 and target_hour in t:
-                        return idx
+                for idx, t in enumerate(times[20:]):
+                    if target_hour in t:
+                        return idx + 20
             return min(len(times) - 1, 24 + 8)
 
         if time_key == "tomorrow_afternoon":
             for target_hour in ["T14:00", "T12:00", "T13:00", "T15:00"]:
-                for idx, t in enumerate(times):
-                    if idx >= 20 and target_hour in t:
-                        return idx
+                for idx, t in enumerate(times[20:]):
+                    if target_hour in t:
+                        return idx + 20
             return min(len(times) - 1, 24 + 14)
+
+        if time_key == "tomorrow_evening":
+            for target_hour in ["T18:00", "T17:00", "T19:00", "T20:00"]:
+                for idx, t in enumerate(times[20:]):
+                    if target_hour in t:
+                        return idx + 20
+            return min(len(times) - 1, 24 + 18)
+
+        if time_key == "tomorrow_night":
+            for target_hour in ["T22:00", "T21:00", "T23:00"]:
+                for idx, t in enumerate(times[20:]):
+                    if target_hour in t:
+                        return idx + 20
+            return min(len(times) - 1, 24 + 22)
+
+        if "afternoon" in time_key:
+            return min(len(times) - 1, 14)
+        if "evening" in time_key:
+            return min(len(times) - 1, 18)
+        if "morning" in time_key:
+            return min(len(times) - 1, 8)
 
         return 0
 

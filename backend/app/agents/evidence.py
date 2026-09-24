@@ -46,12 +46,45 @@ class EvidenceAgent:
         temporal_comparison: Optional[TemporalComparisonResult] = None,
         route_risk: Optional[RouteRiskAssessment] = None,
         candidate_pfzs: Optional[List[NearestPFZ]] = None,
-        pfz_comparison: Optional[PFZComparisonResult] = None
+        pfz_comparison: Optional[PFZComparisonResult] = None,
+        user_message: Optional[str] = None
     ) -> Dict[str, Any]:
         """Produce structured evidence breakdown and final conversational message."""
         logger.info(f"[{self.AGENT_NAME}] Synthesizing multi-agent outputs.")
 
         evidence_items: List[EvidenceItem] = []
+
+        # Handle casual conversational greetings
+        if planner_plan.intent == "conversational_greeting":
+            lang_mode = planner_plan.language_mode or (context.language_mode if context else "bilingual")
+            res = self.llm.synthesize_conversational_response(
+                text=user_message or "",
+                language_mode=lang_mode
+            )
+            return {
+                "answer": res["answer"],
+                "answer_ml": res.get("answer_ml"),
+                "evidence": []
+            }
+
+        # Handle unsupported / out-of-scope domain queries
+        if planner_plan.intent == "unsupported":
+            lang_mode = planner_plan.language_mode or (context.language_mode if context else "bilingual")
+            if planner_plan.clarification_reason == "unsupported_news":
+                res = self.llm.synthesize_unsupported_news_response(
+                    text=user_message or "",
+                    language_mode=lang_mode
+                )
+            else:
+                res = self.llm.synthesize_unsupported_response(
+                    text=user_message or "",
+                    language_mode=lang_mode
+                )
+            return {
+                "answer": res["answer"],
+                "answer_ml": res.get("answer_ml"),
+                "evidence": []
+            }
 
         # Handle early clarification needed
         if planner_plan.intent == "clarification_needed":
@@ -78,7 +111,11 @@ class EvidenceAgent:
                     else (
                         "ദയവായി ഏത് ലക്ഷ്യത്തിലേക്കുള്ള ദൂരമാണ് കണക്കാക്കേണ്ടതെന്ന് വ്യക്തമാക്കുക."
                         if reason == "missing_referent_target"
-                        else "ദയവായി കൂടുതൽ വിവരങ്ങൾ നൽകുക."
+                        else (
+                            "ദയവായി ഏത് കടലോര കേന്ദ്രത്തെക്കുറിച്ചും പ്രവർത്തനത്തെക്കുറിച്ചുമാണ് ചോദിക്കുന്നതെന്ന് വ്യക്തമാക്കുക. (ഉദാ: 'നാളെ രാവിലെ കൊച്ചിയിൽ മീൻപിടിക്കാൻ സുരക്ഷിതമാണോ?')"
+                            if reason == "missing_referent_context"
+                            else "ദയവായി കൂടുതൽ വിവരങ്ങൾ നൽകുക."
+                        )
                     )
                 )
             )
@@ -324,15 +361,22 @@ class EvidenceAgent:
 
             if route_risk.temporal_comparison:
                 tr_comp = route_risk.temporal_comparison
+                dep_idx = tr_comp.get("departure_risk_index") if isinstance(tr_comp, dict) else getattr(tr_comp, "departure_risk_index", 0.0)
+                dep_win = tr_comp.get("departure_window") if isinstance(tr_comp, dict) else getattr(tr_comp, "departure_window", "")
+                arr_idx = tr_comp.get("arrival_risk_index") if isinstance(tr_comp, dict) else getattr(tr_comp, "arrival_risk_index", 0.0)
+                arr_win = tr_comp.get("arrival_window") if isinstance(tr_comp, dict) else getattr(tr_comp, "arrival_window", "")
+                delta_idx = tr_comp.get("delta_risk_index", 0.0) if isinstance(tr_comp, dict) else getattr(tr_comp, "delta_risk_index", 0.0)
+                rec = tr_comp.get("recommendation", "") if isinstance(tr_comp, dict) else getattr(tr_comp, "recommendation", "")
+                tr_raw = tr_comp if isinstance(tr_comp, dict) else tr_comp.model_dump()
                 evidence_items.append(EvidenceItem(
                     category="derived_calculation",
                     claim=(
-                        f"Temporal route risk comparison: Risk index shifts from {tr_comp.departure_risk_index}/10 ({tr_comp.departure_window}) "
-                        f"to {tr_comp.arrival_risk_index}/10 ({tr_comp.arrival_window}) (Δ: {tr_comp.delta_risk_index:+0.1f}). "
-                        f"Recommendation: {tr_comp.recommendation}."
+                        f"Temporal route risk comparison: Risk index shifts from {dep_idx}/10 ({dep_win}) "
+                        f"to {arr_idx}/10 ({arr_win}) (Δ: {delta_idx:+0.1f}). "
+                        f"Recommendation: {rec}."
                     ),
                     source="TEMPORAL_ROUTE_RISK_ENGINE",
-                    raw_data=tr_comp.model_dump()
+                    raw_data=tr_raw
                 ))
 
         # 8. Deterministic PFZ candidate reasoning evidence (M5 Step 3)

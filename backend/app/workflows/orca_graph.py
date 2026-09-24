@@ -232,6 +232,9 @@ def geospatial_node(state: OrcaState) -> OrcaState:
             geo_data.pfz_comparison.target_b.model_dump()
         ]
 
+    # Save geospatial_data in conversation context for safe reuse
+    ctx_dict["geospatial_data"] = geo_data.model_dump()
+
     # Plan safe passage corridor route if destination, nearest PFZ, or selected target is identified
     transit_route_dict = None
     target_for_routing = None
@@ -271,10 +274,13 @@ def risk_node(state: OrcaState) -> OrcaState:
 
     weather_obj = WeatherData(**state["weather_data"]) if state.get("weather_data") else None
     ocean_obj = OceanData(**state["ocean_data"]) if state.get("ocean_data") else None
-    geo_obj = GeospatialData(**state["geospatial_data"]) if state.get("geospatial_data") else None
-
     plan_dict = state.get("planner_plan", {})
     ctx_dict = state.get("conversation_context", {})
+    geo_obj = (
+        GeospatialData(**state["geospatial_data"]) if state.get("geospatial_data")
+        else (GeospatialData(**ctx_dict["geospatial_data"]) if ctx_dict and ctx_dict.get("geospatial_data")
+        else None)
+    )
     vessel_type = plan_dict.get("vessel_type") or (ctx_dict.get("vessel_type") if ctx_dict else None)
 
     assessment = risk_agent.assess(
@@ -307,7 +313,7 @@ def risk_node(state: OrcaState) -> OrcaState:
         assessment_w2 = risk_agent.assess(
             weather=weather_w2,
             ocean=ocean_w2,
-            geospatial=None,
+            geospatial=geo_obj,
             vessel_type=vessel_type
         )
         if weather_obj and ocean_obj:
@@ -370,7 +376,7 @@ def risk_node(state: OrcaState) -> OrcaState:
             assessment_w2 = risk_agent.assess(
                 weather=weather_w2,
                 ocean=ocean_w2,
-                geospatial=None,
+                geospatial=geo_obj,
                 vessel_type=vessel_type
             )
             route_risk_w2 = route_risk_calculator.assess_route_risk(
@@ -402,9 +408,20 @@ def evidence_node(state: OrcaState) -> OrcaState:
     plan_obj = PlannerOutput(**state["planner_plan"])
     weather_obj = WeatherData(**state["weather_data"]) if state.get("weather_data") else None
     ocean_obj = OceanData(**state["ocean_data"]) if state.get("ocean_data") else None
-    geo_obj = GeospatialData(**state["geospatial_data"]) if state.get("geospatial_data") else None
+    ctx_dict = state.get("conversation_context")
+    context_obj = ConversationContext(**ctx_dict) if ctx_dict else None
+
+    geo_obj = (
+        GeospatialData(**state["geospatial_data"]) if state.get("geospatial_data")
+        else (context_obj.geospatial_data if context_obj and context_obj.geospatial_data
+        else (GeospatialData(**ctx_dict["geospatial_data"]) if ctx_dict and ctx_dict.get("geospatial_data") else None))
+    )
     risk_obj = RiskAssessment(**state["risk_assessment"]) if state.get("risk_assessment") else None
-    route_obj = TransitRoute(**state["transit_route"]) if state.get("transit_route") else None
+    route_obj = (
+        TransitRoute(**state["transit_route"]) if state.get("transit_route")
+        else (context_obj.active_route if context_obj and context_obj.active_route
+        else (TransitRoute(**ctx_dict["active_route"]) if ctx_dict and ctx_dict.get("active_route") else None))
+    )
 
     # M5 models
     temp_comp_data = state.get("temporal_comparison")
@@ -425,9 +442,6 @@ def evidence_node(state: OrcaState) -> OrcaState:
     )
     pfz_comp_obj = PFZComparisonResult(**pfz_comp_data) if pfz_comp_data else None
 
-    ctx_dict = state.get("conversation_context")
-    context_obj = ConversationContext(**ctx_dict) if ctx_dict else None
-
     synth = evidence_agent.synthesize(
         planner_plan=plan_obj,
         weather=weather_obj,
@@ -439,11 +453,16 @@ def evidence_node(state: OrcaState) -> OrcaState:
         temporal_comparison=temporal_comp_obj,
         route_risk=route_risk_obj,
         candidate_pfzs=candidate_pfzs_obj,
-        pfz_comparison=pfz_comp_obj
+        pfz_comparison=pfz_comp_obj,
+        user_message=state.get("message")
     )
 
     # Persist updated conversation context to session store
     if context_obj:
+        if geo_obj:
+            context_obj.geospatial_data = geo_obj
+        if route_obj:
+            context_obj.active_route = route_obj
         if temporal_comp_obj:
             context_obj.temporal_comparison = temporal_comp_obj
         if route_risk_obj:
@@ -460,6 +479,7 @@ def evidence_node(state: OrcaState) -> OrcaState:
         "final_answer_ml": synth.get("answer_ml"),
         "evidence_items": [item.model_dump() for item in synth["evidence"]],
         "conversation_context": context_obj.model_dump() if context_obj else None,
+        "geospatial_data": geo_obj.model_dump() if geo_obj else None,
         "transit_route": route_obj.model_dump() if route_obj else None,
         "temporal_comparison": temporal_comp_obj.model_dump() if temporal_comp_obj else None,
         "route_risk": route_risk_obj.model_dump() if route_risk_obj else None,
@@ -476,7 +496,7 @@ def route_from_planner(state: OrcaState) -> str:
     intent = plan.get("intent", "marine_safety")
     req = plan.get("required_agents", [])
 
-    if intent == "clarification_needed" or not req:
+    if intent in ["conversational_greeting", "unsupported", "clarification_needed"] or not req:
         return "evidence_node"
 
     if "weather" in req:
@@ -508,7 +528,7 @@ def route_from_ocean(state: OrcaState) -> str:
 
     if "geospatial" in req:
         return "geospatial_node"
-    if intent in ["temporal_comparison", "route_risk_temporal"] or plan.get("compare_windows"):
+    if intent in ["marine_safety", "safe_passage_route", "temporal_comparison", "route_risk_temporal"] or (state.get("weather_data") and state.get("ocean_data")):
         return "risk_node"
     return "evidence_node"
 

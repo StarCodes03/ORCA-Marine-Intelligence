@@ -9,6 +9,7 @@ Follows strict engineering rules:
 """
 
 import os
+import re
 import json
 import logging
 from typing import Dict, Any, Optional, List
@@ -150,6 +151,12 @@ class LLMService:
                 return (
                     "Please specify a coastal location or landing centre (e.g., Kochi, Chellanam, Vypin, or Munambam) "
                     "so I can provide marine conditions and fishing intelligence.\n\n"
+                    "> **Note:** Demonstration prototype — not for live navigation or marine safety."
+                )
+            elif reason == "missing_referent_context":
+                return (
+                    "Could you clarify which coastal landing centre and activity you are asking about? "
+                    "(e.g., 'Is it safe to fish near Kochi tomorrow morning?')\n\n"
                     "> **Note:** Demonstration prototype — not for live navigation or marine safety."
                 )
             else:
@@ -337,14 +344,28 @@ class LLMService:
                 else:
                     tide_trend = tide_str.title() if tide_str != "N/A" else "Steady"
 
-                lines.append("| Parameter | Morning | Afternoon | Change |")
+                w1_label = str(w1.get("time_window", "Window 1")).replace("_", " ").title()
+                w2_label = str(w2.get("time_window", "Window 2")).replace("_", " ").title()
+
+                lines.append(f"| Parameter | {w1_label} | {w2_label} | Change |")
                 lines.append("| :--- | ---: | ---: | ---: |")
                 lines.append(f"| **Wind** | {w1.get('wind_speed_kmh', 'N/A')} km/h | {w2.get('wind_speed_kmh', 'N/A')} km/h | **{delta_w:+0.1f} km/h** |")
                 lines.append(f"| **Rain** | {w1.get('rain_probability', 'N/A')}% | {w2.get('rain_probability', 'N/A')}% | **{delta_r:+.0f}%** |")
                 lines.append(f"| **Wave** | {w1.get('wave_height_m', 'N/A')} m | {w2.get('wave_height_m', 'N/A')} m | **{delta_wv:+0.2f} m** |")
                 lines.append(f"| **Sea state** | {w1_sea} | {w2_sea} | {sea_change} |")
                 lines.append(f"| **Tide** | Steady | {tide_trend} | {tide_trend} |")
-                lines.append(f"| **Environmental risk** | {w1.get('risk_score', 'N/A')} ({w1.get('risk_level', 'N/A')}) | {w2.get('risk_score', 'N/A')} ({w2.get('risk_level', 'N/A')}) | **{delta_rk:+0.1f} ({trend})** |")
+                # Format environmental risk score change without labeling zero delta as deteriorating
+                if abs(delta_rk) <= 0.05:
+                    rk_change_str = "0.0 (Stable)"
+                elif delta_rk > 0.5:
+                    rk_change_str = f"**{delta_rk:+0.1f} (Higher)**"
+                elif delta_rk < -0.5:
+                    rk_change_str = f"**{delta_rk:+0.1f} (Lower)**"
+                else:
+                    rk_change_str = f"{delta_rk:+0.1f} (Stable)"
+
+                lines.append(f"| **Environmental risk** | {w1.get('risk_score', 'N/A')} ({w1.get('risk_level', 'N/A')}) | {w2.get('risk_score', 'N/A')} ({w2.get('risk_level', 'N/A')}) | {rk_change_str} |")
+                lines.append(f"| **Overall trend** | — | — | **{trend}** |")
                 lines.append("")
                 lines.append(f"**Interpretation:** {tc.get('recommendation')}")
                 lines.append("")
@@ -675,6 +696,122 @@ class LLMService:
         lines.append("> **മുന്നറിയിപ്പ്:** ഇത് പരീക്ഷണാർത്ഥമുള്ള വിവരങ്ങൾ മാത്രമാണ് (Demonstration Prototype). ഔദ്യോഗിക ലൈവ് നാവിഗേഷനായി ഉപയോഗിക്കരുത്.")
 
         return "\n".join(lines)
+
+    def synthesize_conversational_response(self, text: str, language_mode: str = "bilingual") -> Dict[str, Any]:
+        """Synthesize short, friendly conversational response for casual greetings, status, thanks, and farewells."""
+        t_clean = re.sub(r"[^\w\s]", "", text.lower()).strip()
+        mode = language_mode or "bilingual"
+
+        is_thanks = any(w in t_clean for w in ["thanks", "thank", "thx", "cheers", "നന്ദി"])
+        is_bye = any(w in t_clean for w in ["bye", "goodbye", "cya", "see you", "യാത്ര", "take care"])
+        is_status = bool(
+            re.search(r"\bhow\s+(?:are|r)\s+(?:you|u)\b", t_clean) or
+            re.search(r"\bhow\s+(?:are|r)\s+things\b", t_clean) or
+            re.search(r"\bhow(?:'s|\s+is)\s+it\s+going\b", t_clean) or
+            re.search(r"\b(?:what's\s+up|whats\s+up|sup|wazzup)\b", t_clean) or
+            "സുഖമാണോ" in t_clean
+        )
+        is_identity = bool(
+            re.search(r"\b(?:who|what)\s+are\s+(?:you|u)\b", t_clean) or
+            re.search(r"\bwhat\s+(?:can|do)\s+(?:you|u)\s+do\b", t_clean) or
+            t_clean in ["help", "commands", "options"]
+        )
+
+        if is_thanks:
+            en = "You're welcome! 🌊"
+            ml = "സ്വാഗതം! 🌊"
+        elif is_bye:
+            en = "Goodbye! Stay safe out there. 🌊"
+            ml = "യാത്രാമംഗളങ്ങൾ! കടലിൽ എപ്പോഴും സുരക്ഷിതമായിരിക്കുക. 🌊"
+        elif is_status:
+            en = "I'm doing well! I'm ORCA, your marine intelligence assistant. What would you like to know about the sea today? 🌊"
+            ml = "സുഖമായിരിക്കുന്നു! ഞാൻ ORCA — നിങ്ങളുടെ സമുദ്ര വിവര സഹായി. ഇന്നത്തെ കടൽാവസ്ഥയെക്കുറിച്ച് എന്താണ് അറിയേണ്ടത്? 🌊"
+        elif is_identity:
+            en = "I'm ORCA 🌊, your marine intelligence assistant for coastal Kerala. I can assess sea conditions, weather forecasts, INCOIS PFZ targets, and safe passage routes. How can I help you today?"
+            ml = "ഞാൻ ORCA 🌊 — കേരള തീരദേശ മത്സ്യത്തൊഴിലാളികൾക്കായുള്ള സമുദ്ര വിവര സഹായി. കാലാവസ്ഥ, തിരമാല, PFZ കേന്ദ്രങ്ങൾ, സുരക്ഷിത പാതകൾ എന്നിവ അറിയാൻ എന്നോട് ചോദിക്കാം."
+        else:
+            # Concise friendly greeting ("hi", "hello", "hey", "good morning", etc.)
+            en = "Hi! I'm ORCA 🌊. How can I help you with marine conditions today?"
+            ml = "നമസ്കാരം! ഞാൻ ORCA 🌊. ഇന്നത്തെ സമുദ്ര വിവരങ്ങളിൽ ഞാൻ എങ്ങനെയാണ് സഹായിക്കേണ്ടത്?"
+
+        if mode == "malayalam":
+            return {"answer": ml, "answer_ml": ml}
+        elif mode == "english":
+            return {"answer": en, "answer_ml": None}
+        else:
+            return {"answer": en, "answer_ml": ml}
+
+    def synthesize_unsupported_response(self, text: str, language_mode: str = "bilingual") -> Dict[str, Any]:
+        """Synthesize graceful refusal and scope clarification for out-of-domain queries."""
+        mode = language_mode or "bilingual"
+
+        en = (
+            "I am **ORCA**, a specialized marine intelligence and decision-support assistant "
+            "focused strictly on coastal maritime operations in Kerala.\n\n"
+            "I can only assist with:\n"
+            "• Marine weather, wind, rain, and sea state forecasts\n"
+            "• Ocean conditions, wave heights, and sea surface temperature (SST)\n"
+            "• Historical INCOIS Potential Fishing Zones (PFZs)\n"
+            "• Vessel safety assessments and restricted-zone clearance corridors\n\n"
+            "Please ask a question related to coastal marine conditions or fishing operations (e.g., "
+            "*\"Is it safe to fish near Kochi tomorrow morning?\"* or *\"Show PFZ targets near Munambam\"*).\n\n"
+            "> **Note:** Demonstration prototype — not for live navigation or marine safety."
+        )
+        ml = (
+            "ഞാൻ കേരള തീരദേശത്തെ സമുദ്ര വിവരങ്ങൾക്കും സുരക്ഷാ നിർദ്ദേശങ്ങൾക്കുമായി മാത്രം രൂപകൽപ്പന ചെയ്തിട്ടുള്ള "
+            "**ORCA** സഹായിയാണ്.\n\n"
+            "എനിക്ക് ഇനിപ്പറയുന്ന വിഷയങ്ങളിൽ മാത്രമേ മറുപടി നൽകാൻ സാധിക്കൂ:\n"
+            "• സമുദ്ര കാലാവസ്ഥ, കാറ്റ്, മഴ, കടൽാവസ്ഥ\n"
+            "• തിരമാല ഉയരവും സമുദ്ര താപനിലയും\n"
+            "• INCOIS മത്സ്യബന്ധന സാധ്യത മേഖലകൾ (PFZ)\n"
+            "• ബോട്ട് സുരക്ഷാ പരിശോധനയും യാത്രാ പാതകളും\n\n"
+            "ദയവായി കടൽ കാലാവസ്ഥയുമായോ മത്സ്യബന്ധനവുമായോ ബന്ധപ്പെട്ട ചോദ്യങ്ങൾ ചോദിക്കുക "
+            "(ഉദാഹരണത്തിന്: *\"നാളെ കൊച്ചിയിൽ കാലാവസ്ഥ എങ്ങനെയുണ്ട്?\"*).\n\n"
+            "> **കുറിപ്പ്:** ഇത് ഒരു പരീക്ഷണാടിസ്ഥാനത്തിലുള്ള മാതൃകയാണ് — തത്സമയ നാവിഗേഷനായി ഉപയോഗിക്കരുത്."
+        )
+
+        if mode == "malayalam":
+            return {"answer": ml, "answer_ml": ml}
+        elif mode == "english":
+            return {"answer": en, "answer_ml": None}
+        else:
+            return {"answer": en, "answer_ml": ml}
+
+    def synthesize_unsupported_news_response(self, text: str, language_mode: str = "bilingual") -> Dict[str, Any]:
+        """Synthesize scope clarification stating that live marine news is not supported."""
+        mode = language_mode or "bilingual"
+
+        en = (
+            "I am **ORCA**, a specialized marine intelligence and decision-support assistant "
+            "focused on coastal maritime operations in Kerala.\n\n"
+            "**Operational Scope Notice:** The ORCA prototype provides live marine weather and ocean forecasts, "
+            "historical INCOIS Potential Fishing Zones (PFZs), vessel safety assessments, and restricted-zone clearance corridors, "
+            "but **does not currently provide a live marine-news, maritime events, or breaking news feed**.\n\n"
+            "You can ask for marine weather or operational decision support near coastal landing centers, such as:\n"
+            "• *\"What is the weather and wave forecast near Kochi today?\"*\n"
+            "• *\"Is it safe for an FRP canoe to fish near Munambam tomorrow morning?\"*\n"
+            "• *\"Show PFZ targets within 30 km of Chellanam.\"*\n\n"
+            "> **Note:** Demonstration prototype — decision-support only; not a live news or media service."
+        )
+        ml = (
+            "ഞാൻ കേരള തീരദേശത്തെ സമുദ്ര വിവരങ്ങൾക്കും സുരക്ഷാ നിർദ്ദേശങ്ങൾക്കുമായി രൂപകൽപ്പന ചെയ്തിട്ടുള്ള "
+            "**ORCA** സഹായിയാണ്.\n\n"
+            "**പ്രവർത്തന പരിധി അറിയിപ്പ്:** ORCA പ്രോട്ടോടൈപ്പ് സമുദ്ര കാലാവസ്ഥ, തിരമാല വിവരങ്ങൾ, "
+            "ചരിത്രപരമായ INCOIS PFZ വിവരങ്ങൾ, ബോട്ട് സുരക്ഷാ പരിശോധന എന്നിവ നൽകുന്നുണ്ടെങ്കിലും, "
+            "**തത്സമയ സമുദ്ര വാർത്തകളോ (live marine news) വാർത്താ ഫീഡുകളോ നൽകുന്നില്ല**.\n\n"
+            "കാലാവസ്ഥയ്ക്കും സുരക്ഷാ പരിശോധനയ്ക്കുമായി ദയവായി താഴെപ്പറയുന്ന തരത്തിലുള്ള ചോദ്യങ്ങൾ ചോദിക്കുക:\n"
+            "• *\"ഇന്ന് കൊച്ചിയിലെ കാലാവസ്ഥയും തിരമാലയും എങ്ങനെയുണ്ട്?\"*\n"
+            "• *\"നാളെ രാവിലെ മുനമ്പത്ത് മീൻപിടിക്കാൻ സുരക്ഷിതമാണോ?\"*\n"
+            "• *\"ചെല്ലാനത്തിനടുത്തുള്ള PFZ വിവരങ്ങൾ കാണിക്കുക.\"*\n\n"
+            "> **കുറിപ്പ്:** ഇത് ഒരു പരീക്ഷണാടിസ്ഥാനത്തിലുള്ള മാതൃകയാണ് — വാർത്താ സേവനമല്ല."
+        )
+
+        if mode == "malayalam":
+            return {"answer": ml, "answer_ml": ml}
+        elif mode == "english":
+            return {"answer": en, "answer_ml": None}
+        else:
+            return {"answer": en, "answer_ml": ml}
 
 
 # Singleton instance

@@ -302,6 +302,7 @@ class ConversationContext(BaseModel):
     active_route: Optional[TransitRoute] = None
     temporal_comparison: Optional[TemporalComparisonResult] = None
     route_risk: Optional[RouteRiskAssessment] = None
+    geospatial_data: Optional[GeospatialData] = None
     turn_count: int = 0
     updated_at: Optional[str] = None
 

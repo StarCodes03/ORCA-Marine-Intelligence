@@ -49,6 +49,247 @@ KNOWN_LOCATIONS: Dict[str, Dict[str, Any]] = {
 class ContextResolver:
     """Deterministic multi-turn context resolver and intent classifier."""
 
+    # Marine vocabulary sets for deterministic domain intent filtering
+    MARINE_KEYWORDS_WORDS = {
+        "fish", "fishing", "fisher", "fishers", "fisherman", "fishermen", "catch", "catches",
+        "trawl", "trawling", "trawler", "trawlers", "vallam", "canoe", "catamaran", "boat",
+        "boats", "vessel", "vessels", "craft", "obm", "frp", "motorized", "mechanized",
+        "nets", "netting", "seine", "seiner", "gillnet", "trolling", "angling",
+        "safe", "safety", "risk", "danger", "dangerous", "hazard", "hazards", "hazardous",
+        "warning", "advisable", "suraksha",
+        "weather", "wind", "winds", "rain", "rainfall", "lightning", "storm", "cyclone",
+        "squall", "gust", "gusts", "visibility", "fog",
+        "ocean", "marine", "sea", "seas", "swell", "swells", "tide", "tides", "wave", "waves",
+        "sst", "chlorophyll", "salinity", "bathymetry", "depth",
+        "pfz", "pfzs", "geofence", "geofences", "corridor", "corridors", "waypoint", "waypoints",
+        "nautical", "offshore", "coast", "coastal", "harbor", "harbour",
+        "route", "routes", "passage", "passages", "transit", "transits", "alternative", "alternatives",
+        "sail", "sailing", "navigate", "navigation",
+        "കാലാവസ്ഥ", "കാറ്റ്", "മഴ", "തിരമാല", "കടൽ", "സുരക്ഷിതം", "മത്സ്യം", "മീൻ", "വള്ളം", "റൂട്ട്", "പാത"
+    }
+
+    MARINE_KEYWORDS_PHRASES = [
+        "can i go", "can we go", "can i sail", "can i fish", "go out", "sail out", "venture out",
+        "sea state", "sea condition", "sea surface temperature", "wave height",
+        "potential fishing zone", "potential fishing zones", "fishing ground", "fishing grounds",
+        "fishing zone", "fish zone", "restricted zone", "restricted zones", "security zone",
+        "security zones", "safe passage", "transit route", "passage plan", "landing centre",
+        "landing center", "deep sea",
+        "how far", "what is the distance", "distance to",
+        "route alternatives", "compare routes", "alternative routes", "alternative paths", "route options",
+        "which one is closest", "which target is closest"
+    ]
+
+    REFERENTIAL_ADVISORY_PATTERNS = [
+        r"\bwhen\s+(?:is|would|will|might)\s+(?:it\s+)?(?:fine|better|safe|good|ok|advisable|recommended)\b",
+        r"\bwhen\s+can\s+(?:i|we)\s+(?:go|sail|fish|head\s+out|venture|do\s+(?:that|this|so))\b",
+        r"\bwhen\s+should\s+(?:i|we)\s+(?:go|sail|fish|head\s+out|venture|do\s+(?:that|this|so))\b",
+        r"\b(?:is\s+there|what\s+is)\s+a\s+better\s+time\b",
+        r"\bwhen\s+would\s+be\s+better\b",
+        r"\bwhen\s+is\s+better\b",
+        r"\bwhich\s+time\s+(?:is|would\s+be)\s+(?:better|safer|best)\b",
+        r"\bis\s+there\s+a\s+safer\s+(?:time|window|day|hour)\b",
+        r"\bwhen\s+to\s+(?:go|sail|fish|do\s+(?:that|this))\b",
+    ]
+
+    REFERENTIAL_FOLLOWUP_PATTERNS = [
+        r"\b(?:what|how)\s+about\b",
+        r"\bwhat\s+if\b",
+        r"\band\s+(?:tomorrow|afternoon|evening|morning|night|today|saturday|sunday|monday|tuesday|wednesday|thursday|friday|then|there|later)\b",
+        r"\b(?:is\s+it\s+safe|can\s+(?:i|we)\s+go|how\s+are\s+conditions)\s+(?:there|then)\b",
+        r"\b(?:do|doing)\s+(?:that|this)\b",
+        r"\bhow\s+about\s+(?:tomorrow|afternoon|evening|morning|night|today|saturday|sunday|monday|tuesday|wednesday|thursday|friday)\b",
+        r"^(?:and|then)\s+",
+    ]
+
+    GENERAL_KNOWLEDGE_EXCLUSIONS = {
+        "mayor", "population", "history", "hotel", "hotels", "restaurant", "restaurants",
+        "flight", "flights", "train", "trains", "airport", "capital", "president", "minister",
+        "prime minister", "mla", "mp", "cricket", "football", "movie", "cinema", "actor",
+        "actress", "song", "lyrics", "recipe", "code", "python", "javascript", "java", "math",
+        "joke", "joke?"
+    }
+
+    GREETING_PATTERNS = [
+        r"^(?:hi|hello|hey|hiya|howdy|hola|namaste|vanakkam|namaskaram)(?:\s+(?:orca|assistant|there|friend|bot|u|all))?$",
+        r"^good\s+(?:morning|afternoon|evening|day|night)(?:\s+(?:orca|assistant|there|friend|bot|all))?$",
+        r"^how\s+(?:are|r)\s+(?:you|u)(?:\s+doing)?$",
+        r"^how\s+(?:are|r)\s+things$",
+        r"^how(?:'s|\s+is)\s+it\s+going$",
+        r"^(?:what's\s+up|whats\s+up|sup|wazzup)$",
+        r"^(?:thanks|thank\s+(?:you|u)|thx|cheers|thanks\s+a\s+lot|thank\s+(?:you|u)\s+very\s+much)(?:\s+(?:orca|assistant|there|friend|bot))?$",
+        r"^(?:bye|goodbye|see\s+(?:you|u|ya)|cya|take\s+care)(?:\s+(?:orca|assistant|there|friend|bot))?$",
+        r"^(?:who\s+are\s+(?:you|u)|what\s+are\s+(?:you|u)|what\s+can\s+(?:you|u)\s+do|what\s+do\s+(?:you|u)\s+do|help|commands|options)$",
+        r"^(?:നമസ്കാരം|ഹലോ|സുഖമാണോ|നന്ദി)(?:\s+orca)?$",
+    ]
+
+    CONVERSATIONAL_WORDS = {
+        "hi", "hello", "hey", "hiya", "howdy", "hola", "namaste", "vanakkam", "namaskaram",
+        "orca", "assistant", "bot", "there", "friend", "all",
+        "good", "morning", "afternoon", "evening", "day", "night",
+        "how", "are", "r", "you", "u", "ya", "doing", "things", "is", "it", "going", "hows",
+        "whats", "what's", "up", "sup", "wazzup",
+        "thanks", "thank", "thx", "cheers", "a", "lot", "very", "much",
+        "bye", "goodbye", "see", "cya", "later", "take", "care",
+        "who", "what", "can", "do", "help", "commands", "options",
+        "and", "please", "okay", "ok", "cool",
+        "നമസ്കാരം", "ഹലോ", "സുഖമാണോ", "നന്ദി"
+    }
+
+    VALID_MARINE_INTENTS = {
+        "marine_safety",
+        "weather_query",
+        "ocean_query",
+        "pfz_search",
+        "pfz_radius_filter",
+        "pfz_distance",
+        "pfz_comparison",
+        "pfz_geofence_check",
+        "safe_passage_route",
+        "route_risk_temporal",
+        "route_alternatives",
+        "temporal_comparison",
+    }
+
+    NEWS_PATTERNS = [
+        # Explicit marine news phrases
+        r"\b(?:marine|sea|ocean|coastal|maritime|fishing|port)\s+news\b",
+        r"\bnews\s+(?:about|on|in|at|from|of)\s+(?:the\s+)?(?:sea|ocean|marine|coast|coastal|waters?|fisheries|kerala)\b",
+        r"\b(?:what\s+is\s+new|what's\s+new)\s+in\s+(?:the\s+)?(?:sea|marine|ocean|coast|water)?\s*news\b",
+        r"\b(?:what\s+is\s+new|what's\s+new)\s+in\s+(?:the\s+)?(?:sea|marine|ocean|coast)\b",
+        r"\b(?:any|latest|recent|today(?:'s)?|daily|breaking)\s+(?:.*?\b)?(?:marine|sea|ocean|coastal|maritime)\s+news\b",
+        r"\b(?:any|latest|recent|today(?:'s)?)\s+news\s+(?:today|now)?\b",
+        r"\bnews\s+today\b",
+        # Event / occurrence inquiries at sea
+        r"\bwhat\s+(?:has\s+)?happened\s+(?:in|at|on)\s+(?:the\s+)?(?:sea|ocean|coast|water)\b",
+        r"\bwhat(?:'s|\s+is)\s+happening\s+(?:in|at|on)\s+(?:the\s+)?(?:sea|ocean|coast|water)\b",
+        r"\bwhat(?:'s|\s+is)\s+going\s+on\s+(?:in|at|on)\s+(?:the\s+)?(?:sea|ocean|coast|water)\b",
+        r"\b(?:any|latest)\s+(?:incidents?|accidents?|events?|headlines?|stories|articles?|updates?)\s+(?:at|in|on)\s+(?:the\s+)?(?:sea|ocean)\b",
+        r"\b(?:വാർത്തകൾ|വാർത്ത)\b",
+    ]
+
+    @classmethod
+    def is_marine_news_query(cls, text: str) -> bool:
+        """Deterministically detect marine news, current events, or incident inquiries."""
+        t = text.lower().strip()
+        words = set(re.findall(r"\b[\w'-]+\b", t))
+
+        # Direct pattern match
+        if any(bool(re.search(p, t)) for p in cls.NEWS_PATTERNS):
+            return True
+
+        # Semantic keywords combination: asking for news/headlines in marine context
+        has_news_word = bool(words & {"news", "headline", "headlines", "incident", "incidents", "accident", "accidents", "വാർത്ത", "വാർത്തകൾ"})
+        has_marine_context = bool(words & {"sea", "marine", "ocean", "maritime", "coastal", "coast", "water", "waters", "offshore"})
+
+        if has_news_word and (has_marine_context or "news" in words):
+            return True
+
+        # "what happened" / "what is happening" combined with marine words
+        if re.search(r"\bwhat\s+(?:has\s+)?happened\b", t) or re.search(r"\bwhat(?:'s|\s+is)\s+happening\b", t) or re.search(r"\bwhat(?:'s|\s+is)\s+going\s+on\b", t):
+            if has_marine_context or "sea" in words or "ocean" in words:
+                return True
+
+        return False
+
+    @classmethod
+    def is_referential_inquiry(cls, text: str) -> bool:
+        """Detect deictic or connective follow-up inquiries that depend on context."""
+        t = text.lower().strip()
+        all_patterns = cls.REFERENTIAL_ADVISORY_PATTERNS + cls.REFERENTIAL_FOLLOWUP_PATTERNS
+        return any(bool(re.search(p, t)) for p in all_patterns)
+
+    @classmethod
+    def has_marine_intent(cls, text: str, prior_context: Optional[ConversationContext] = None) -> bool:
+        """Deterministically determine if user message pertains to marine intelligence.
+
+        Evaluates explicit coordinates, known coastal geography, marine terminology,
+        and multi-turn referents when prior marine context exists.
+        """
+        # Marine news / current events inquiries are outside supported operational marine intelligence
+        if cls.is_marine_news_query(text):
+            return False
+
+        text_lower = text.lower().strip()
+        words = set(re.findall(r"\b[\w'-]+\b", text_lower))
+
+        # 1. Explicit geographic coordinates
+        if cls.extract_coordinates(text) is not None:
+            return True
+
+        # Check for general knowledge exclusions (e.g., 'Who is the mayor of Kochi?', 'Tell me a joke')
+        has_general_exclusion = any(ex in words or ex in text_lower for ex in cls.GENERAL_KNOWLEDGE_EXCLUSIONS)
+
+        # 2. Direct marine domain keywords
+        has_marine_word = any(kw in words for kw in cls.MARINE_KEYWORDS_WORDS)
+        has_marine_phrase = any(phrase in text_lower for phrase in cls.MARINE_KEYWORDS_PHRASES)
+
+        if has_marine_word or has_marine_phrase:
+            return True
+
+        # 3. Referent distance query, candidate comparison, or closest target patterns
+        if bool(
+            re.search(r"\bhow far\b", text_lower) or
+            re.search(r"\bwhat is the distance\b", text_lower) or
+            re.search(r"\bdistance to\b", text_lower) or
+            re.search(r"\bcompare\s+(?:the\s+)?(?:first|1st|target\s*1)\s+and\s+(?:the\s+)?(?:second|2nd|target\s*2)\b", text_lower) or
+            re.search(r"\bcompare\s+(?:the\s+)?(?:second|2nd|target\s*2)\s+and\s+(?:the\s+)?(?:first|1st|target\s*1)\b", text_lower) or
+            re.search(r"\bcompare\s+(?:them|candidates|targets|both|the\s+two)\b", text_lower) or
+            re.search(r"\bwhich\s+(?:one|target|pfz)?\s*is\s+(?:the\s+)?closest\b", text_lower)
+        ):
+            return True
+
+        if has_general_exclusion:
+            return False
+
+        # 4. Known coastal locations (Kochi, Chellanam, Vypin, Munambam, etc.)
+        for loc_key in KNOWN_LOCATIONS:
+            if (loc_key in text_lower) if any(ord(c) > 127 for c in loc_key) else re.search(r"\b" + re.escape(loc_key) + r"\b", text_lower):
+                return True
+
+        # 5. Referential follow-up inquiry (either contextual or requiring clarification)
+        if cls.is_referential_inquiry(text):
+            return True
+
+        # 6. Multi-turn referents if prior conversation context exists with active marine state
+        has_prior_marine_intent = bool(
+            prior_context and prior_context.last_intent and prior_context.last_intent in cls.VALID_MARINE_INTENTS
+        )
+        if prior_context and (prior_context.location or prior_context.candidate_pfzs or prior_context.selected_pfz or has_prior_marine_intent or prior_context.activity):
+            # Check for follow-up modifiers ("what about...", "and tomorrow", "how about...")
+            if bool(re.search(r"\b(?:what|how)\s+about\b", text_lower) or re.search(r"^(?:and|what\s+if)\b", text_lower)):
+                return True
+            # Check for temporal modifiers
+            if any(t in words for t in ["morning", "afternoon", "evening", "night", "tomorrow", "today", "saturday", "sunday", "monday", "tuesday", "wednesday", "thursday", "friday"]):
+                return True
+            # Check for comparative referents ("compare them", "which one", "the first one", "target 2")
+            if any(ref in text_lower for ref in ["compare", "target", "which one", "how far", "distance", "nearest"]):
+                return True
+            # Pronouns referring to prior subject ("that", "it", "this", "there", "then")
+            if any(p in words for p in ["that", "there", "then"]):
+                return True
+
+        return False
+
+    @classmethod
+    def is_conversational_greeting(cls, text: str) -> bool:
+        """Check if message is a standalone greeting, pleasantry, gratitude, or identity question."""
+        text_clean = re.sub(r"[^\w\s]", "", text.lower()).strip()
+        if not text_clean:
+            return True
+
+        # Check regex patterns
+        for pattern in cls.GREETING_PATTERNS:
+            if re.search(pattern, text_clean):
+                return True
+
+        # Check token membership
+        tokens = text_clean.split()
+        if tokens and all(t in cls.CONVERSATIONAL_WORDS for t in tokens):
+            return True
+
+        return False
+
     @staticmethod
     def extract_coordinates(text: str) -> Optional[LocationCoords]:
         """Extract explicit coordinate pairs like '9.85, 76.15', '9.85N, 76.15E'."""
@@ -162,6 +403,11 @@ class ContextResolver:
             return "tomorrow"
         if "today" in text_lower or "now" in text_lower or "current" in text_lower:
             return "today"
+
+        # Weekdays
+        for day in ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]:
+            if re.search(r"\b" + day + r"\b", text_lower):
+                return day
 
         # Inherit prior date
         return prior_date
@@ -288,12 +534,11 @@ class ContextResolver:
 
         # Extract current or inherited fields
         location = cls.extract_location(text, p_loc)
-        if user_lat is not None and user_lon is not None:
-            if location:
-                location.latitude = user_lat
-                location.longitude = user_lon
-            else:
-                location = LocationCoords(name="User Vessel Position", latitude=user_lat, longitude=user_lon)
+
+        # Only adopt user GPS coordinates if the query explicitly refers to user's vessel / position / "near me"
+        is_user_pos_query = any(bool(re.search(r"\b" + re.escape(w) + r"\b", text_lower)) for w in ["near me", "around me", "my position", "my location", "current position", "current location", "where i am", "my vessel", "my boat", "here"])
+        if is_user_pos_query and user_lat is not None and user_lon is not None:
+            location = LocationCoords(name="User Vessel Position", latitude=round(user_lat, 4), longitude=round(user_lon, 4))
 
         date = cls.extract_date(text, p_date)
         time_window = cls.extract_time_window(text, p_win)
@@ -323,6 +568,55 @@ class ContextResolver:
             re.search(r"^(and|what\s+if)\b", text_lower)
         )
 
+        # Domain routing check: separate non-marine queries (news, greetings, unrelated) from marine intelligence
+        if not cls.has_marine_intent(text, prior_context):
+            if cls.is_marine_news_query(text):
+                intent = "unsupported"
+                clarification_reason = "unsupported_news"
+            elif cls.is_conversational_greeting(text):
+                intent = "conversational_greeting"
+                clarification_reason = None
+            else:
+                intent = "unsupported"
+                clarification_reason = "unsupported_domain"
+
+            plan = PlannerOutput(
+                intent=intent,
+                location=None,
+                destination=None,
+                destination_name=None,
+                time_range=None,
+                activity=p_act,
+                vessel_type=vessel_type,
+                language_mode=language_mode,
+                required_agents=[],
+                clarification_reason=clarification_reason
+            )
+
+            conv_id = conversation_id or (prior_context.conversation_id if prior_context else "demo-001")
+            updated_context = ConversationContext(
+                conversation_id=conv_id,
+                location=p_loc,
+                destination=p_dest,
+                destination_name=p_dest_name,
+                date=p_date,
+                time_window=p_win,
+                activity=p_act,
+                vessel_type=vessel_type,
+                language_mode=language_mode,
+                last_intent=p_intent,
+                selected_pfz=p_pfz,
+                candidate_pfzs=p_candidates,
+                compared_pfzs=p_compared,
+                pfz_comparison=p_pfz_comparison,
+                active_route=p_route,
+                temporal_comparison=prior_context.temporal_comparison if prior_context else None,
+                route_risk=prior_context.route_risk if prior_context else None,
+                geospatial_data=prior_context.geospatial_data if prior_context else None,
+                turn_count=turn_count + 1
+            )
+            return plan, updated_context
+
         intent: str
         required_agents: List[str]
         clarification_reason: Optional[str] = None
@@ -330,6 +624,52 @@ class ContextResolver:
         radius_km: Optional[float] = None
         target_ordinal: Optional[int] = None
         compare_targets: Optional[List[int]] = None
+
+        # Check for standalone referential inquiry with NO prior marine context
+        has_active_marine_intent = bool(p_intent and p_intent in cls.VALID_MARINE_INTENTS)
+        has_active_marine_context = bool(
+            p_loc or p_act or has_active_marine_intent or p_candidates or p_pfz or p_route or
+            (prior_context and (prior_context.temporal_comparison or prior_context.route_risk))
+        )
+        words_set = set(re.findall(r"\b[\w'-]+\b", text_lower))
+        has_direct_location = any(loc in text_lower for loc in KNOWN_LOCATIONS) or (cls.extract_coordinates(text) is not None)
+
+        if cls.is_referential_inquiry(text) and not has_active_marine_context and not has_direct_location:
+            plan = PlannerOutput(
+                intent="clarification_needed",
+                location=None,
+                destination=None,
+                destination_name=None,
+                time_range=None,
+                activity=None,
+                vessel_type=vessel_type,
+                language_mode=language_mode,
+                required_agents=[],
+                clarification_reason="missing_referent_context"
+            )
+            conv_id = conversation_id or (prior_context.conversation_id if prior_context else "demo-001")
+            updated_context = ConversationContext(
+                conversation_id=conv_id,
+                location=p_loc,
+                destination=p_dest,
+                destination_name=p_dest_name,
+                date=p_date,
+                time_window=p_win,
+                activity=p_act,
+                vessel_type=vessel_type,
+                language_mode=language_mode,
+                last_intent=p_intent,
+                selected_pfz=p_pfz,
+                candidate_pfzs=p_candidates,
+                compared_pfzs=p_compared,
+                pfz_comparison=p_pfz_comparison,
+                active_route=p_route,
+                temporal_comparison=prior_context.temporal_comparison if prior_context else None,
+                route_risk=prior_context.route_risk if prior_context else None,
+                geospatial_data=prior_context.geospatial_data if prior_context else None,
+                turn_count=turn_count + 1
+            )
+            return plan, updated_context
 
         # Scenario 0a: Candidate Pair Comparison ("Compare the first and second", "Compare target 1 and target 2", "Compare them")
         if bool(
@@ -485,6 +825,25 @@ class ContextResolver:
             if location is None:
                 location = LocationCoords(name="Kochi", latitude=9.9312, longitude=76.2673)
 
+        # Scenario 1b-advisory: Timing Advisory Inquiry ("when is it fine to do that", "when would be better", "when can i go")
+        elif any(re.search(p, text_lower) for p in cls.REFERENTIAL_ADVISORY_PATTERNS):
+            intent = "temporal_comparison"
+            required_agents = ["weather", "ocean"]
+            activity = activity or p_act or "fishing"
+            if location is None:
+                location = p_loc or LocationCoords(name="Kochi", latitude=9.9312, longitude=76.2673)
+
+            d_prefix = date or p_date or "today"
+            if d_prefix == "today":
+                if p_win in ["afternoon", "evening"]:
+                    compare_windows = ["today_afternoon", "tomorrow_morning"]
+                else:
+                    compare_windows = ["today_morning", "today_afternoon"]
+            elif d_prefix == "tomorrow":
+                compare_windows = ["tomorrow_morning", "tomorrow_afternoon"]
+            else:
+                compare_windows = [f"{d_prefix}_morning", f"{d_prefix}_afternoon"]
+
         # Scenario 1c: Temporal Condition Comparison ("Is morning or afternoon better?", "How will conditions change tomorrow?", "Will the sea be calmer later?")
         elif bool(
             re.search(r"\b(morning\s+(or|vs|and)\s+afternoon|afternoon\s+(or|vs|and)\s+morning)\b", text_lower) or
@@ -517,8 +876,8 @@ class ContextResolver:
                 d_prefix = date or p_date or "tomorrow"
                 compare_windows = [f"{d_prefix}_morning", f"{d_prefix}_afternoon"]
 
-        # Scenario 3: Follow-up modifier ("What about afternoon?", "What about the second one?", "What about Chellanam?")
-        elif is_followup_modifier and not any(w in text_lower for w in ["pfz", "fishing zone"]):
+        # Scenario 3: Follow-up modifier ("What about afternoon?", "What about the second one?", "What about Chellanam?", "and tomorrow?", "how about evening?")
+        elif (is_followup_modifier or re.search(r"\b(?:what|how)\s+about\b", text_lower) or re.search(r"^(?:and|then)\b", text_lower)) and not any(w in text_lower for w in ["pfz", "fishing zone"]):
             ord_idx = cls.extract_ordinal_index(text_lower)
             if ord_idx is not None:
                 if p_candidates and len(p_candidates) > ord_idx:
@@ -532,14 +891,40 @@ class ContextResolver:
                     required_agents = []
                     clarification_reason = "missing_candidate_context"
             else:
-                if p_intent:
+                if p_intent in ["marine_safety", "safe_passage_route", "weather_query", "ocean_query"]:
                     intent = p_intent
                 else:
                     intent = "marine_safety"
 
-                if intent == "marine_safety":
-                    required_agents = ["weather", "ocean", "geospatial"]
-                elif intent == "pfz_search" or intent == "pfz_radius_filter":
+                activity = activity or p_act or "fishing"
+                if location is None:
+                    location = p_loc or LocationCoords(name="Kochi", latitude=9.9312, longitude=76.2673)
+
+                has_temporal_modifier = any(
+                    t in words_set for t in [
+                        "morning", "afternoon", "evening", "night",
+                        "tomorrow", "today", "saturday", "sunday",
+                        "monday", "tuesday", "wednesday", "thursday", "friday",
+                        "later", "soon"
+                    ]
+                )
+                spatial_context_unchanged = (
+                    p_loc is not None and
+                    location is not None and
+                    location.name == p_loc.name and
+                    (dest_loc is None or (p_dest is not None and dest_loc.name == p_dest.name)) and
+                    (p_pfz is not None or p_route is not None or (prior_context and prior_context.geospatial_data is not None))
+                )
+
+                if intent in ["marine_safety", "safe_passage_route"]:
+                    if has_temporal_modifier and spatial_context_unchanged:
+                        required_agents = ["weather", "ocean"]
+                        logger.info("[ContextResolver] Pure temporal follow-up with unchanged spatial context: selecting ['weather', 'ocean'] and reusing existing spatial context.")
+                    else:
+                        required_agents = ["weather", "ocean", "geospatial"]
+                elif intent == "temporal_comparison":
+                    required_agents = ["weather", "ocean"]
+                elif intent in ["pfz_search", "pfz_radius_filter"]:
                     required_agents = ["ocean", "geospatial"]
                 elif intent == "weather_query":
                     required_agents = ["weather"]
@@ -559,7 +944,30 @@ class ContextResolver:
         # Scenario 5: Marine Safety Query
         elif any(w in text_lower for w in ["safe", "safety", "risk", "danger", "can i go", "warning", "advisable"]):
             intent = "marine_safety"
-            required_agents = ["weather", "ocean", "geospatial"]
+            if location is None and activity is not None:
+                location = LocationCoords(name="Kochi", latitude=9.9312, longitude=76.2673)
+
+            has_temporal_modifier = any(
+                t in words_set for t in [
+                    "morning", "afternoon", "evening", "night",
+                    "tomorrow", "today", "saturday", "sunday",
+                    "monday", "tuesday", "wednesday", "thursday", "friday",
+                    "later", "soon"
+                ]
+            )
+            spatial_context_unchanged = (
+                not has_direct_location and
+                p_loc is not None and
+                location is not None and
+                location.name == p_loc.name and
+                (dest_loc is None or (p_dest is not None and dest_loc.name == p_dest.name)) and
+                (p_pfz is not None or p_route is not None or (prior_context and prior_context.geospatial_data is not None))
+            )
+            if has_temporal_modifier and spatial_context_unchanged:
+                required_agents = ["weather", "ocean"]
+                logger.info("[ContextResolver] Safety query with unchanged spatial context: selecting ['weather', 'ocean'] and reusing existing spatial context.")
+            else:
+                required_agents = ["weather", "ocean", "geospatial"]
 
         # Scenario 6: Weather Query
         elif any(w in text_lower for w in ["weather", "wind", "rain", "lightning", "storm", "temp", "കാലാവസ്ഥ", "കാറ്റ്", "മഴ"]):
@@ -582,7 +990,7 @@ class ContextResolver:
 
         # If a location is required by agents but missing in both message and prior context,
         # fail safely by prompting the user for a location rather than inventing one.
-        if location is None and intent in ["marine_safety", "weather_query", "ocean_query"] and not is_referent_distance_query:
+        if location is None and intent in ["marine_safety", "weather_query", "ocean_query", "pfz_search", "pfz_radius_filter", "safe_passage_route"] and not is_referent_distance_query:
             intent = "clarification_needed"
             required_agents = []
             clarification_reason = "missing_location"
@@ -623,6 +1031,7 @@ class ContextResolver:
             active_route=p_route,
             temporal_comparison=prior_context.temporal_comparison if prior_context else None,
             route_risk=prior_context.route_risk if prior_context else None,
+            geospatial_data=prior_context.geospatial_data if prior_context else None,
             turn_count=turn_count + 1
         )
 

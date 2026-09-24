@@ -107,7 +107,7 @@ class TemporalReasoningEngine:
             recommendation = (
                 f"{w2_label} exhibits improved operational conditions with lower assessed risk "
                 f"(score Δ: {delta_risk:+0.1f}, wave Δ: {delta_wave:+}m, wind Δ: {delta_wind:+}km/h). "
-                f"{w2_label} is recommended."
+                f"{w2_label} offers comparatively more favorable conditions."
             )
 
         # 4. Check for DETERIORATING conditions (risk rises or either wave or wind worsens significantly)
@@ -121,9 +121,13 @@ class TemporalReasoningEngine:
             if delta_risk > tol_risk:
                 adverse.append(f"increased risk score ({delta_risk:+0.1f})")
             adverse_str = ", ".join(adverse)
+            if is_risk_stable and (delta_wave > tol_wave or delta_wind > tol_wind):
+                risk_note = f"While composite risk score remains {window_1.risk_level.title()} ({window_1.risk_score:.1f}), conditions deteriorate in {w2_label} due to {adverse_str}. "
+            else:
+                risk_note = f"Conditions deteriorate in {w2_label} due to {adverse_str}. "
             recommendation = (
-                f"Conditions deteriorate in {w2_label} due to {adverse_str}. "
-                f"{w1_label} offers more favorable conditions."
+                f"{risk_note}"
+                f"{w1_label} offers comparatively more favorable conditions."
             )
 
         # 5. Fallback if outside strict buckets

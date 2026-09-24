@@ -460,3 +460,118 @@ def test_weather_and_ocean_units_schema_validation():
     assert o.retrieved_at == "2026-09-23T16:00:00Z"
     assert o.forecast_timestamp == "2026-09-24T08:00"
 
+
+def test_upstream_open_meteo_payload_change_modifies_orca_response():
+    """Verify that changing/mock-patching upstream Open-Meteo HTTP responses directly
+    and dynamically changes the resulting ORCA values, risk assessment, and chat answer,
+    proving data is genuinely dynamic and not hardcoded into response templates.
+    """
+    from fastapi.testclient import TestClient
+    from app.main import app
+    client = TestClient(app)
+
+    # 1. Condition A: Calm conditions (wind: 8.5 km/h, wave: 0.6 m)
+    calm_weather_api = {
+        "latitude": 9.93,
+        "longitude": 76.27,
+        "hourly": {
+            "time": [f"2026-09-24T{h:02d}:00" for h in range(24)] + [f"2026-09-25T{h:02d}:00" for h in range(24)],
+            "wind_speed_10m": [8.5] * 48,
+            "wind_direction_10m": [260.0] * 48,
+            "precipitation_probability": [5.0] * 48,
+            "weather_code": [1] * 48,
+            "temperature_2m": [28.5] * 48,
+            "visibility": [10000.0] * 48,
+        }
+    }
+    calm_marine_api = {
+        "latitude": 9.93,
+        "longitude": 76.27,
+        "hourly": {
+            "time": [f"2026-09-24T{h:02d}:00" for h in range(24)] + [f"2026-09-25T{h:02d}:00" for h in range(24)],
+            "wave_height": [0.6] * 48,
+            "wave_direction": [220.0] * 48,
+            "wave_period": [6.0] * 48,
+            "ocean_current_velocity": [1.5] * 48,
+            "ocean_current_direction": [180.0] * 48,
+            "sea_surface_temperature": [29.0] * 48,
+            "sea_level_height_msl": [0.10] * 48,
+        }
+    }
+
+    def mock_get_calm(url, params=None, **kwargs):
+        resp = MagicMock()
+        resp.status_code = 200
+        if "marine" in str(url):
+            resp.json.return_value = calm_marine_api
+        else:
+            resp.json.return_value = calm_weather_api
+        return resp
+
+    marine_cache.clear()
+    with patch.object(httpx.Client, "get", side_effect=mock_get_calm):
+        res_calm = client.post("/api/chat", json={
+            "message": "is it safe to fish near Kochi tomorrow morning?",
+            "conversation_id": "test-provenance-calm"
+        })
+    assert res_calm.status_code == 200
+    d_calm = res_calm.json()
+    assert d_calm["weather"]["wind_speed_kmh"] == 8.5
+    assert d_calm["ocean"]["wave_height_m"] == 0.6
+    assert d_calm["risk"]["risk_level"] == "LOW"
+    assert "8.5 km/h" in d_calm["answer"]
+    assert "0.6 m" in d_calm["answer"]
+
+    # 2. Condition B: Severe squall conditions (wind: 48.0 km/h, wave: 3.2 m)
+    severe_weather_api = {
+        "latitude": 9.93,
+        "longitude": 76.27,
+        "hourly": {
+            "time": [f"2026-09-24T{h:02d}:00" for h in range(24)] + [f"2026-09-25T{h:02d}:00" for h in range(24)],
+            "wind_speed_10m": [48.0] * 48,
+            "wind_direction_10m": [290.0] * 48,
+            "precipitation_probability": [80.0] * 48,
+            "weather_code": [95] * 48,
+            "temperature_2m": [26.0] * 48,
+            "visibility": [4000.0] * 48,
+        }
+    }
+    severe_marine_api = {
+        "latitude": 9.93,
+        "longitude": 76.27,
+        "hourly": {
+            "time": [f"2026-09-24T{h:02d}:00" for h in range(24)] + [f"2026-09-25T{h:02d}:00" for h in range(24)],
+            "wave_height": [3.2] * 48,
+            "wave_direction": [240.0] * 48,
+            "wave_period": [10.0] * 48,
+            "ocean_current_velocity": [3.5] * 48,
+            "ocean_current_direction": [200.0] * 48,
+            "sea_surface_temperature": [27.5] * 48,
+            "sea_level_height_msl": [0.35] * 48,
+        }
+    }
+
+    def mock_get_severe(url, params=None, **kwargs):
+        resp = MagicMock()
+        resp.status_code = 200
+        if "marine" in str(url):
+            resp.json.return_value = severe_marine_api
+        else:
+            resp.json.return_value = severe_weather_api
+        return resp
+
+    marine_cache.clear()
+    with patch.object(httpx.Client, "get", side_effect=mock_get_severe):
+        res_severe = client.post("/api/chat", json={
+            "message": "is it safe to fish near Kochi tomorrow morning?",
+            "conversation_id": "test-provenance-severe"
+        })
+    assert res_severe.status_code == 200
+    d_severe = res_severe.json()
+    assert d_severe["weather"]["wind_speed_kmh"] == 48.0
+    assert d_severe["ocean"]["wave_height_m"] == 3.2
+    assert d_severe["risk"]["risk_level"] in ["HIGH", "CRITICAL"]
+    assert d_severe["risk"]["risk_score"] > d_calm["risk"]["risk_score"]
+    assert "48.0 km/h" in d_severe["answer"]
+    assert "3.2 m" in d_severe["answer"]
+

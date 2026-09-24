@@ -302,15 +302,19 @@ class RiskAssessmentAgent:
         if not reasons:
             reasons.append("All observed marine meteorological and ocean parameters within safe baseline limits.")
 
+        # Environmental risk score is deterministic on a standard 0.0 - 10.0 composite scale.
+        # Bounded to [0.0, 10.0] so displayed representation (Score X/10) is mathematically consistent.
+        bounded_score = round(min(max(total_score, 0.0), 10.0), 1)
+
         score_breakdown = ScoreBreakdown(
             factors=breakdown_factors,
             factor_scores=breakdown_dict,
-            total_score=round(total_score, 1)
+            total_score=bounded_score
         )
 
         assessment = RiskAssessment(
             risk_level=risk_level,
-            risk_score=round(total_score, 1),
+            risk_score=bounded_score,
             vessel_type=vessel_type,
             reasons=reasons,
             evidence=evidence,
