@@ -24,6 +24,9 @@ class PlannerOutput(BaseModel):
         default_factory=lambda: ["weather", "ocean", "geospatial"]
     )
     compare_windows: Optional[List[str]] = None
+    radius_km: Optional[float] = None
+    target_ordinal: Optional[int] = None
+    compare_targets: Optional[List[int]] = None
     clarification_reason: Optional[str] = None
 
 
@@ -31,6 +34,8 @@ class WeatherData(BaseModel):
     source: str = "MOCK_WEATHER_DATA"
     location: str = "Kochi"
     forecast_time: str = "tomorrow_morning"
+    forecast_timestamp: Optional[str] = None
+    retrieved_at: Optional[str] = None
     wind_speed_kmh: float
     wind_direction_deg: Optional[float] = 270.0
     rain_probability: float
@@ -40,12 +45,16 @@ class WeatherData(BaseModel):
     temperature_c: Optional[float] = 29.0
     visibility_km: Optional[float] = None
     is_mock: bool = True
+    units: Optional[Dict[str, Dict[str, Any]]] = None
     raw_metadata: Optional[Dict[str, Any]] = None
 
 
 class OceanData(BaseModel):
     source: str = "MOCK_OCEAN_DATA"
     location: str = "Kochi Offshore"
+    forecast_time: Optional[str] = None
+    forecast_timestamp: Optional[str] = None
+    retrieved_at: Optional[str] = None
     sst_c: float
     wave_height_m: float
     sea_state: str
@@ -59,6 +68,7 @@ class OceanData(BaseModel):
     sea_level_height_m: Optional[float] = None
     tide_note: Optional[str] = None
     is_mock: bool = True
+    units: Optional[Dict[str, Dict[str, Any]]] = None
     raw_metadata: Optional[Dict[str, Any]] = None
 
 
@@ -87,6 +97,35 @@ class RestrictedZoneCheck(BaseModel):
     distance_to_nearest_zone_km: Optional[float] = None
 
 
+class PFZComparisonResult(BaseModel):
+    target_a: NearestPFZ
+    target_b: NearestPFZ
+    closer_target: str
+    distance_difference_km: float
+    bearing_difference_deg: Optional[float] = None
+    depth_comparison: str
+    geofence_status_a: str  # CLEAR or INTERSECTS_RESTRICTED_ZONE
+    geofence_status_b: str  # CLEAR or INTERSECTS_RESTRICTED_ZONE
+    intersected_zones_a: List[str] = Field(default_factory=list)
+    intersected_zones_b: List[str] = Field(default_factory=list)
+    direct_route_intersects_a: bool = False
+    direct_route_intersects_b: bool = False
+    unavailable_fields: List[str] = Field(
+        default_factory=lambda: [
+            "sst_c (not in snapshot)",
+            "chlorophyll_mg_m3 (not in snapshot)",
+            "target_species (not in snapshot)",
+            "confidence_score (not in snapshot)",
+            "fish_abundance (not in snapshot)",
+            "real_time_validity (historical snapshot)"
+        ]
+    )
+    disclaimer: str = (
+        "Historical INCOIS landing-centre-associated PFZ target comparison — not a live fishing advisory. "
+        "Proximity does not imply biological suitability or present-day fishing potential."
+    )
+
+
 class GeospatialData(BaseModel):
     source: str = "INCOIS"
     source_type: str = "OFFICIAL_SNAPSHOT"
@@ -97,6 +136,10 @@ class GeospatialData(BaseModel):
     user_location: LocationCoords
     nearest_pfz: Optional[NearestPFZ] = None
     all_pfzs: List[NearestPFZ] = Field(default_factory=list)
+    candidate_pfzs: List[NearestPFZ] = Field(default_factory=list)
+    pfz_comparison: Optional[PFZComparisonResult] = None
+    direct_route_geofence_status: Optional[str] = None
+    direct_route_intersected_zones: List[str] = Field(default_factory=list)
     restricted_zone_check: RestrictedZoneCheck = Field(default_factory=RestrictedZoneCheck)
 
 
@@ -227,6 +270,9 @@ class ConversationContext(BaseModel):
     language_mode: str = "bilingual"
     last_intent: Optional[str] = None
     selected_pfz: Optional[NearestPFZ] = None
+    candidate_pfzs: List[NearestPFZ] = Field(default_factory=list)
+    compared_pfzs: Optional[List[NearestPFZ]] = None
+    pfz_comparison: Optional[PFZComparisonResult] = None
     active_route: Optional[TransitRoute] = None
     temporal_comparison: Optional[TemporalComparisonResult] = None
     route_risk: Optional[RouteRiskAssessment] = None
@@ -256,6 +302,8 @@ class ChatResponse(BaseModel):
     vessel_profile: Optional[VesselProfile] = None
     temporal_comparison: Optional[TemporalComparisonResult] = None
     route_risk: Optional[RouteRiskAssessment] = None
+    candidate_pfzs: List[NearestPFZ] = Field(default_factory=list)
+    pfz_comparison: Optional[PFZComparisonResult] = None
     evidence: List[EvidenceItem] = Field(default_factory=list)
     agent_trace: List[str] = Field(default_factory=list)
     spatial_features: Optional[Dict[str, Any]] = None

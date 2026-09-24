@@ -19,6 +19,27 @@ interface MarineMapProps {
   spatialLayers?: any;
   highlightRoute?: boolean;
   transitRoute?: TransitRoute | null;
+  showVessel?: boolean;
+  showPfz?: boolean;
+  showRestricted?: boolean;
+  showRoute?: boolean;
+  radiusFilterKm?: number | null;
+  onSelectPfz?: (pfz: NearestPFZ) => void;
+  hideFloatingLegend?: boolean;
+}
+
+function computeDistanceKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371.0;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
 }
 
 // Controller to smoothly pan/zoom map and fit bounds when target PFZ or route updates
@@ -160,6 +181,13 @@ export const MarineMap: React.FC<MarineMapProps> = ({
   spatialLayers,
   highlightRoute = true,
   transitRoute,
+  showVessel = true,
+  showPfz = true,
+  showRestricted = true,
+  showRoute = true,
+  radiusFilterKm = null,
+  onSelectPfz,
+  hideFloatingLegend = false,
 }) => {
   const defaultCenter: [number, number] = [9.9312, 76.2673]; // Kochi
   const vesselCoords: [number, number] = [
@@ -169,7 +197,7 @@ export const MarineMap: React.FC<MarineMapProps> = ({
 
   // Extract PFZ features, ensuring nearestPfz is always represented
   const rawFeatures = spatialLayers?.pfz?.features || [];
-  const pfzFeatures = [...rawFeatures];
+  let pfzFeatures = [...rawFeatures];
   if (
     nearestPfz &&
     !pfzFeatures.some(
@@ -188,26 +216,42 @@ export const MarineMap: React.FC<MarineMapProps> = ({
     });
   }
 
+  // Apply radius filter if specified
+  if (radiusFilterKm != null && radiusFilterKm > 0) {
+    pfzFeatures = pfzFeatures.filter((feat: any) => {
+      const pt = feat.geometry?.coordinates || [feat.longitude, feat.latitude] || [0, 0];
+      const dist = computeDistanceKm(vesselCoords[0], vesselCoords[1], pt[1], pt[0]);
+      const isTarget = Boolean(
+        nearestPfz &&
+        ((feat.properties?.pfz_id || feat.pfz_id) === nearestPfz.pfz_id ||
+         (feat.properties?.name || feat.name) === nearestPfz.name)
+      );
+      return dist <= radiusFilterKm || isTarget;
+    });
+  }
+
   // Extract Restricted Zone features
   const restrictedFeatures = spatialLayers?.restricted_zones?.features || [];
 
   return (
     <div className="map-pane">
       {/* Floating Legend / Quick Layer Status */}
-      <div className="map-floating-overlay">
-        <div className="map-legend-item">
-          <span className="legend-swatch" style={{ background: '#0284c7' }} />
-          <span>Vessel Location</span>
+      {!hideFloatingLegend && (
+        <div className="map-floating-overlay">
+          <div className="map-legend-item">
+            <span className="legend-swatch" style={{ background: '#0284c7' }} />
+            <span>Vessel Location</span>
+          </div>
+          <div className="map-legend-item">
+            <span className="legend-swatch" style={{ background: '#10b981' }} />
+            <span>PFZ Targets</span>
+          </div>
+          <div className="map-legend-item">
+            <span className="legend-swatch" style={{ background: 'rgba(239, 68, 68, 0.4)', border: '1px solid #ef4444' }} />
+            <span>Restricted Maritime Zones</span>
+          </div>
         </div>
-        <div className="map-legend-item">
-          <span className="legend-swatch" style={{ background: '#10b981' }} />
-          <span>Potential Fishing Zones (PFZ)</span>
-        </div>
-        <div className="map-legend-item">
-          <span className="legend-swatch" style={{ background: 'rgba(239, 68, 68, 0.4)', border: '1px solid #ef4444' }} />
-          <span>Restricted Maritime Zones</span>
-        </div>
-      </div>
+      )}
 
       <MapContainer
         center={defaultCenter}
@@ -237,130 +281,162 @@ export const MarineMap: React.FC<MarineMapProps> = ({
         </Marker>
 
         {/* User / Demo Vessel Marker */}
-        <Marker position={vesselCoords} icon={vesselIcon}>
-          <Popup>
-            <div style={{ padding: '4px' }}>
-              <strong style={{ color: '#0284c7' }}>Operational Vessel (Demo)</strong>
-              <p style={{ fontSize: '11px', color: '#cbd5e1', margin: '4px 0 0 0' }}>
-                Status: Underway / Standby<br />
-                Position: {vesselCoords[0].toFixed(4)}° N, {vesselCoords[1].toFixed(4)}° E
-              </p>
-            </div>
-          </Popup>
-        </Marker>
+        {showVessel && (
+          <Marker position={vesselCoords} icon={vesselIcon}>
+            <Popup>
+              <div style={{ padding: '4px' }}>
+                <strong style={{ color: '#0284c7' }}>Operational Vessel (Demo)</strong>
+                <p style={{ fontSize: '11px', color: '#cbd5e1', margin: '4px 0 0 0' }}>
+                  Status: Underway / Standby<br />
+                  Position: {vesselCoords[0].toFixed(4)}° N, {vesselCoords[1].toFixed(4)}° E
+                </p>
+              </div>
+            </Popup>
+          </Marker>
+        )}
 
         {/* Restricted Maritime Zones Polygons */}
-        {restrictedFeatures.map((feat: any, idx: number) => {
-          const coords = feat.geometry?.coordinates?.[0] || [];
-          // Leaflet expects [lat, lng] while GeoJSON is [lng, lat]
-          const latLngs: [number, number][] = coords.map((pt: [number, number]) => [pt[1], pt[0]]);
-          const props = feat.properties || {};
+        {showRestricted &&
+          restrictedFeatures.map((feat: any, idx: number) => {
+            const coords = feat.geometry?.coordinates?.[0] || [];
+            // Leaflet expects [lat, lng] while GeoJSON is [lng, lat]
+            const latLngs: [number, number][] = coords.map((pt: [number, number]) => [pt[1], pt[0]]);
+            const props = feat.properties || {};
 
-          return (
-            <Polygon
-              key={props.zone_id || idx}
-              positions={latLngs}
-              pathOptions={{
-                color: '#ef4444',
-                fillColor: '#dc2626',
-                fillOpacity: 0.25,
-                weight: 2,
-                dashArray: '4, 4',
-              }}
-            >
-              <Popup>
-                <div style={{ padding: '4px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#f87171' }}>
-                    <AlertTriangle size={15} />
-                    <strong>{props.name}</strong>
-                  </div>
-                  <p style={{ fontSize: '11px', color: '#cbd5e1', marginTop: '4px' }}>
-                    <strong>Restriction:</strong> {props.restriction_level}<br />
-                    <strong>Category:</strong> {props.category}<br />
-                    <span style={{ color: '#94a3b8' }}>Source: {props.source || 'DEMO_GIS_DATA'}</span>
-                  </p>
-                </div>
-              </Popup>
-            </Polygon>
-          );
-        })}
-
-        {/* Potential Fishing Zones (PFZs) */}
-        {pfzFeatures.map((feat: any, idx: number) => {
-          const pt = feat.geometry?.coordinates || [feat.longitude, feat.latitude] || [0, 0];
-          const lat = pt[1];
-          const lon = pt[0];
-          const props = feat.properties || feat || {};
-          const isTarget = Boolean(
-            nearestPfz &&
-            ((props.pfz_id && nearestPfz.pfz_id === props.pfz_id) ||
-             (props.name && nearestPfz.name === props.name))
-          );
-
-          return (
-            <React.Fragment key={`${props.pfz_id || idx}-${isTarget ? 'active' : 'normal'}`}>
-              <Marker
-                position={[lat, lon]}
-                icon={isTarget ? activePfzIcon : pfzIcon}
-                zIndexOffset={isTarget ? 1000 : 10}
+            return (
+              <Polygon
+                key={props.zone_id || idx}
+                positions={latLngs}
+                pathOptions={{
+                  color: '#ef4444',
+                  fillColor: '#dc2626',
+                  fillOpacity: 0.25,
+                  weight: 2,
+                  dashArray: '4, 4',
+                }}
               >
                 <Popup>
                   <div style={{ padding: '4px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: isTarget ? '#06b6d4' : '#10b981' }}>
-                      <Fish size={15} />
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#f87171' }}>
+                      <AlertTriangle size={15} />
                       <strong>{props.name}</strong>
-                      {isTarget && (
-                        <span style={{
-                          background: '#06b6d4',
-                          color: '#ffffff',
-                          fontSize: '9px',
-                          fontWeight: 700,
-                          padding: '1px 5px',
-                          borderRadius: '3px'
-                        }}>
-                          RECOMMENDED
-                        </span>
-                      )}
                     </div>
-                    <div style={{ fontSize: '11px', color: '#cbd5e1', marginTop: '6px', lineHeight: 1.4 }}>
-                      <div><strong>ID:</strong> {props.pfz_id}</div>
-                      {props.landing_centre && <div><strong>Associated Landing Centre:</strong> {props.landing_centre}</div>}
-                      {props.distance_km && <div><strong>Distance from LC:</strong> {props.distance_km}</div>}
-                      {props.bearing_deg != null && <div><strong>Bearing:</strong> {props.bearing_deg}° {props.direction || ''}</div>}
-                      {props.depth_m && <div><strong>Depth:</strong> {props.depth_m}</div>}
-                      {props.target_species && <div><strong>Target Species:</strong> {props.target_species}</div>}
-                      {props.sst_c != null && <div><strong>SST:</strong> {props.sst_c} °C</div>}
-                      {props.chlorophyll_mg_m3 != null && <div><strong>Chlorophyll:</strong> {props.chlorophyll_mg_m3} mg/m³</div>}
-                      {props.confidence_score != null && <div><strong>Confidence:</strong> {Math.round(props.confidence_score * 100)}%</div>}
-                      <div style={{ marginTop: '4px', color: '#94a3b8' }}>
-                        Source: {props.source || 'DEMO_GIS_DATA'}
-                        {props.source_type && ` (${props.source_type})`}
-                      </div>
-                    </div>
+                    <p style={{ fontSize: '11px', color: '#cbd5e1', marginTop: '4px' }}>
+                      <strong>Restriction:</strong> {props.restriction_level}<br />
+                      <strong>Category:</strong> {props.category}<br />
+                      <span style={{ color: '#94a3b8' }}>Source: {props.source || 'DEMO_GIS_DATA'}</span>
+                    </p>
                   </div>
                 </Popup>
-              </Marker>
+              </Polygon>
+            );
+          })}
 
-              {/* Pulsing ring around target PFZ */}
-              {isTarget && (
-                <CircleMarker
-                  center={[lat, lon]}
-                  radius={24}
-                  pathOptions={{
-                    color: '#06b6d4',
-                    fillColor: '#06b6d4',
-                    fillOpacity: 0.1,
-                    weight: 1.5,
-                    dashArray: '3, 3'
-                  }}
-                />
-              )}
-            </React.Fragment>
-          );
-        })}
+        {/* Potential Fishing Zones (PFZs) */}
+        {showPfz &&
+          pfzFeatures.map((feat: any, idx: number) => {
+            const pt = feat.geometry?.coordinates || [feat.longitude, feat.latitude] || [0, 0];
+            const lat = pt[1];
+            const lon = pt[0];
+            const props = feat.properties || feat || {};
+            const isTarget = Boolean(
+              nearestPfz &&
+              ((props.pfz_id && nearestPfz.pfz_id === props.pfz_id) ||
+               (props.name && nearestPfz.name === props.name))
+            );
+
+            return (
+              <React.Fragment key={`${props.pfz_id || idx}-${isTarget ? 'active' : 'normal'}`}>
+                <Marker
+                  position={[lat, lon]}
+                  icon={isTarget ? activePfzIcon : pfzIcon}
+                  zIndexOffset={isTarget ? 1000 : 10}
+                >
+                  <Popup>
+                    <div style={{ padding: '4px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: isTarget ? '#06b6d4' : '#10b981' }}>
+                        <Fish size={15} />
+                        <strong>{props.name}</strong>
+                        {isTarget && (
+                          <span style={{
+                            background: '#06b6d4',
+                            color: '#ffffff',
+                            fontSize: '9px',
+                            fontWeight: 700,
+                            padding: '1px 5px',
+                            borderRadius: '3px'
+                          }}>
+                            TARGET PFZ
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: '11px', color: '#cbd5e1', marginTop: '6px', lineHeight: 1.4 }}>
+                        <div><strong>ID:</strong> {props.pfz_id}</div>
+                        {props.landing_centre && <div><strong>Associated Landing Centre:</strong> {props.landing_centre}</div>}
+                        {props.distance_km && <div><strong>Distance from LC:</strong> {props.distance_km}</div>}
+                        {props.bearing_deg != null && <div><strong>Bearing:</strong> {props.bearing_deg}° {props.direction || ''}</div>}
+                        {props.depth_m && <div><strong>Depth:</strong> {props.depth_m}</div>}
+                        {props.target_species && <div><strong>Target Species:</strong> {props.target_species}</div>}
+                        {props.sst_c != null && <div><strong>SST:</strong> {props.sst_c} °C</div>}
+                        {props.chlorophyll_mg_m3 != null && <div><strong>Chlorophyll:</strong> {props.chlorophyll_mg_m3} mg/m³</div>}
+                        {props.confidence_score != null && <div><strong>Confidence:</strong> {Math.round(props.confidence_score * 100)}%</div>}
+                        <div style={{ marginTop: '4px', color: '#94a3b8' }}>
+                          Source: {props.source || 'DEMO_GIS_DATA'}
+                          {props.source_type && ` (${props.source_type})`}
+                        </div>
+                        {onSelectPfz && !isTarget && (
+                          <button
+                            type="button"
+                            onClick={() => onSelectPfz(props)}
+                            style={{
+                              marginTop: '6px',
+                              background: '#0284c7',
+                              color: '#ffffff',
+                              border: 'none',
+                              borderRadius: '4px',
+                              padding: '3px 8px',
+                              fontSize: '10px',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            Set as Focus Target
+                          </button>
+                        )}
+                        <div style={{
+                          fontSize: '10px',
+                          color: '#7dd3fc',
+                          marginTop: '6px',
+                          fontStyle: 'italic',
+                          borderTop: '1px solid rgba(255,255,255,0.1)',
+                          paddingTop: '4px'
+                        }}>
+                          Historical INCOIS landing-centre-associated PFZ target — not a live fishing advisory.
+                        </div>
+                      </div>
+                    </div>
+                  </Popup>
+                </Marker>
+
+                {/* Pulsing ring around target PFZ */}
+                {isTarget && (
+                  <CircleMarker
+                    center={[lat, lon]}
+                    radius={24}
+                    pathOptions={{
+                      color: '#06b6d4',
+                      fillColor: '#06b6d4',
+                      fillOpacity: 0.1,
+                      weight: 1.5,
+                      dashArray: '3, 3'
+                    }}
+                  />
+                )}
+              </React.Fragment>
+            );
+          })}
 
         {/* Safe Passage Transit Corridor Route (M4) */}
-        {highlightRoute && transitRoute?.geojson_feature?.geometry?.coordinates && (
+        {showRoute && highlightRoute && transitRoute?.geojson_feature?.geometry?.coordinates && (
           <Polyline
             positions={transitRoute.geojson_feature.geometry.coordinates.map((coord: number[]) => [coord[1], coord[0]])}
             pathOptions={{
@@ -373,7 +449,7 @@ export const MarineMap: React.FC<MarineMapProps> = ({
         )}
 
         {/* Clearance Waypoints (M4) */}
-        {highlightRoute && transitRoute?.waypoints?.map((wp, idx) => (
+        {showRoute && highlightRoute && transitRoute?.waypoints?.map((wp, idx) => (
           <Marker
             key={`wp-${idx}`}
             position={[wp.latitude, wp.longitude]}
@@ -394,7 +470,7 @@ export const MarineMap: React.FC<MarineMapProps> = ({
         ))}
 
         {/* Fallback Direct line between vessel and nearest PFZ if no transitRoute */}
-        {highlightRoute && !transitRoute && nearestPfz && (
+        {showRoute && highlightRoute && !transitRoute && nearestPfz && (
           <Polyline
             positions={[vesselCoords, [nearestPfz.latitude, nearestPfz.longitude]]}
             pathOptions={{

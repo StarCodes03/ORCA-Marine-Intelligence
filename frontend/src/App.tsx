@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { Header } from './components/Header';
-import { MarineMap } from './map/MarineMap';
-import { ChatPanel } from './components/ChatPanel';
-import { AgentTraceDrawer } from './components/AgentTraceDrawer';
+import { Sidebar, type DashboardRoute } from './components/Sidebar';
+import { ChatDashboard } from './dashboards/ChatDashboard';
+import { MarineIntelligenceDashboard } from './dashboards/MarineIntelligenceDashboard';
+import { RouteSafetyDashboard } from './dashboards/RouteSafetyDashboard';
+import { DataEvidenceDashboard } from './dashboards/DataEvidenceDashboard';
 import { checkHealth, getSpatialLayers, sendChatMessage } from './services/api';
 import type { ChatResponse, LocationCoords, NearestPFZ } from './services/api';
 
@@ -26,19 +28,52 @@ export const App: React.FC = () => {
   const [latestResponse, setLatestResponse] = useState<ChatResponse | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [selectedVessel, setSelectedVessel] = useState<string>('motorized_frp_obm');
-  const [selectedLanguage, setSelectedLanguage] = useState<string>('bilingual');
+  const [selectedLanguage, setSelectedLanguage] = useState<string>('english');
 
-  // Initial greeting message
+  // Lightweight routing initialized from browser pathname (defaults to /chat)
+  const getInitialRoute = (): DashboardRoute => {
+    const path = window.location.pathname;
+    if (path === '/marine' || path === '/route' || path === '/evidence') {
+      return path;
+    }
+    return '/chat';
+  };
+
+  const [activeRoute, setActiveRoute] = useState<DashboardRoute>(getInitialRoute);
+
+  const navigateTo = (route: DashboardRoute) => {
+    setActiveRoute(route);
+    if (window.location.pathname !== route) {
+      window.history.pushState(null, '', route);
+    }
+  };
+
+  // Synchronize with browser back/forward buttons
+  useEffect(() => {
+    const handlePopState = () => {
+      const path = window.location.pathname;
+      if (path === '/marine' || path === '/route' || path === '/evidence' || path === '/chat') {
+        setActiveRoute(path as DashboardRoute);
+      } else {
+        setActiveRoute('/chat');
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  // Initial conversational greeting message
   const [messages, setMessages] = useState<Message[]>([
     {
       id: 'init-1',
       sender: 'assistant',
-      text: "Welcome to ORCA (Marine Ecosystem Reasoning with Collaborative Agents).\n\nI am your agentic marine intelligence advisor for Kochi and the Arabian Sea coastal sector. You can test safety for fishing expeditions, locate nearest Potential Fishing Zones (PFZs), or inspect marine meteorology.",
-      timestamp: new Date().toLocaleTimeString(),
+      text: "Welcome to ORCA — your conversational marine intelligence assistant for Kochi and the Arabian Sea coastal sector.\n\nAsk me about fishing safety, weather and sea conditions, or safe passage corridors to Potential Fishing Zones.",
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     },
   ]);
 
-  // Load health and spatial layers on mount
+  // Load backend health and spatial layers on mount
   useEffect(() => {
     async function initSystem() {
       try {
@@ -70,7 +105,7 @@ export const App: React.FC = () => {
       id: 'user-' + Date.now(),
       sender: 'user',
       text: userPrompt,
-      timestamp: new Date().toLocaleTimeString(),
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
 
     setMessages((prev) => [...prev, userMsg]);
@@ -88,7 +123,7 @@ export const App: React.FC = () => {
 
       setLatestResponse(response);
 
-      // If response has spatial features or geospatial data, identify nearest PFZ
+      // If response has spatial features or geospatial data, identify target PFZ
       const targetPfz = response.spatial_features?.nearest_pfz || response.geospatial?.nearest_pfz || null;
       if (targetPfz) {
         setNearestPfz(targetPfz);
@@ -99,7 +134,7 @@ export const App: React.FC = () => {
         sender: 'assistant',
         text: response.answer,
         responsePayload: response,
-        timestamp: new Date().toLocaleTimeString(),
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       };
 
       setMessages((prev) => [...prev, assistantMsg]);
@@ -109,7 +144,7 @@ export const App: React.FC = () => {
         id: 'err-' + Date.now(),
         sender: 'assistant',
         text: `⚠️ Agent Communication Error: ${error.message || 'Failed to reach backend API. Ensure FastAPI is running.'}`,
-        timestamp: new Date().toLocaleTimeString(),
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       };
       setMessages((prev) => [...prev, errorMsg]);
     } finally {
@@ -122,36 +157,63 @@ export const App: React.FC = () => {
       {/* Top Application Header */}
       <Header
         systemHealthy={systemHealthy}
-        sectorName="Kochi & Arabian Sea Sector, Kerala"
+        sectorName="Kochi Coastal Sector, Kerala"
         latestResponse={latestResponse}
       />
 
-      {/* Main Workspace Split View */}
-      <div className="main-workspace">
-        {/* Left: Interactive Marine Map */}
-        <MarineMap
-          vesselLocation={vesselLocation}
-          nearestPfz={nearestPfz}
-          spatialLayers={spatialLayers}
-          highlightRoute={Boolean(nearestPfz || latestResponse?.transit_route)}
-          transitRoute={latestResponse?.transit_route}
+      {/* Persistent Shell Layout: Sidebar + Active Workspace */}
+      <div className="app-shell">
+        <Sidebar
+          activeRoute={activeRoute}
+          onNavigate={navigateTo}
+          systemHealthy={systemHealthy}
         />
 
-        {/* Right: Conversational Intelligence Panel */}
-        <ChatPanel
-          messages={messages}
-          onSendMessage={handleSendMessage}
-          isLoading={isLoading}
-          onSelectPfz={(pfz) => setNearestPfz(pfz)}
-          latestResponse={latestResponse}
-          selectedVessel={selectedVessel}
-          onVesselChange={setSelectedVessel}
-          selectedLanguage={selectedLanguage}
-          onLanguageChange={setSelectedLanguage}
-        />
+        {/* Dynamic Workspace Container */}
+        <main className="main-workspace-container" role="main">
+          {activeRoute === '/chat' && (
+            <ChatDashboard
+              messages={messages}
+              onSendMessage={handleSendMessage}
+              isLoading={isLoading}
+              onSelectPfz={(pfz) => setNearestPfz(pfz)}
+              latestResponse={latestResponse}
+              selectedVessel={selectedVessel}
+              onVesselChange={setSelectedVessel}
+              selectedLanguage={selectedLanguage}
+              onLanguageChange={setSelectedLanguage}
+              onNavigateToMarine={() => navigateTo('/marine')}
+            />
+          )}
 
-        {/* Collapsible Bottom: Developer Agent Trace & Audit Log */}
-        <AgentTraceDrawer latestResponse={latestResponse} />
+          {activeRoute === '/marine' && (
+            <MarineIntelligenceDashboard
+              vesselLocation={vesselLocation}
+              nearestPfz={nearestPfz}
+              spatialLayers={spatialLayers}
+              transitRoute={latestResponse?.transit_route}
+              onSelectPfz={(pfz) => setNearestPfz(pfz)}
+              onNavigateToRoute={() => navigateTo('/route')}
+            />
+          )}
+
+          {activeRoute === '/route' && (
+            <RouteSafetyDashboard
+              vesselLocation={vesselLocation}
+              nearestPfz={nearestPfz}
+              spatialLayers={spatialLayers}
+              latestResponse={latestResponse}
+              selectedVessel={selectedVessel}
+              onVesselChange={setSelectedVessel}
+              onNavigateToChat={() => navigateTo('/chat')}
+              onSelectPfz={(pfz) => setNearestPfz(pfz)}
+            />
+          )}
+
+          {activeRoute === '/evidence' && (
+            <DataEvidenceDashboard latestResponse={latestResponse} />
+          )}
+        </main>
       </div>
     </div>
   );

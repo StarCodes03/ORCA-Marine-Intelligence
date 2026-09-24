@@ -134,6 +134,22 @@ class ContextResolver:
 
         return f"{d}_{w}"
 
+    @staticmethod
+    def extract_ordinal_index(text: str) -> Optional[int]:
+        """Extract 0-based index from ordinal phrases: 'first'/'target 1' -> 0, 'second'/'target 2' -> 1, etc."""
+        t = text.lower()
+        if re.search(r"\b(?:the\s+)?(?:first|1st|target\s*1)\b", t):
+            return 0
+        if re.search(r"\b(?:the\s+)?(?:second|2nd|target\s*2)\b", t):
+            return 1
+        if re.search(r"\b(?:the\s+)?(?:third|3rd|target\s*3)\b", t):
+            return 2
+        if re.search(r"\b(?:the\s+)?(?:fourth|4th|target\s*4)\b", t):
+            return 3
+        if re.search(r"\b(?:the\s+)?(?:fifth|5th|target\s*5)\b", t):
+            return 4
+        return None
+
     @classmethod
     def resolve(
         cls,
@@ -158,6 +174,9 @@ class ContextResolver:
         p_lang = prior_context.language_mode if prior_context else "bilingual"
         p_intent = prior_context.last_intent if prior_context else None
         p_pfz = prior_context.selected_pfz if prior_context else None
+        p_candidates = prior_context.candidate_pfzs if prior_context else []
+        p_compared = prior_context.compared_pfzs if prior_context else None
+        p_pfz_comparison = prior_context.pfz_comparison if prior_context else None
         p_route = prior_context.active_route if prior_context else None
         turn_count = prior_context.turn_count if prior_context else 0
 
@@ -202,10 +221,111 @@ class ContextResolver:
         required_agents: List[str]
         clarification_reason: Optional[str] = None
         compare_windows: Optional[List[str]] = None
+        radius_km: Optional[float] = None
+        target_ordinal: Optional[int] = None
+        compare_targets: Optional[List[int]] = None
 
-        # Scenario 1: Referent distance query ("How far is it?")
-        if is_referent_distance_query and not any(k in text_lower for k in KNOWN_LOCATIONS):
-            if p_pfz is not None:
+        # Scenario 0a: Candidate Pair Comparison ("Compare the first and second", "Compare target 1 and target 2", "Compare them")
+        if bool(
+            re.search(r"\bcompare\s+(?:the\s+)?(?:first|1st|target\s*1)\s+and\s+(?:the\s+)?(?:second|2nd|target\s*2)\b", text_lower) or
+            re.search(r"\bcompare\s+(?:the\s+)?(?:second|2nd|target\s*2)\s+and\s+(?:the\s+)?(?:first|1st|target\s*1)\b", text_lower) or
+            re.search(r"\bcompare\s+(?:them|candidates|targets|both|the\s+two)\b", text_lower)
+        ) and not ("morning" in text_lower or "afternoon" in text_lower or "today" in text_lower or "tomorrow" in text_lower):
+            if p_candidates and len(p_candidates) >= 2:
+                intent = "pfz_comparison"
+                required_agents = ["geospatial"]
+                compare_targets = [0, 1]
+                logger.info(f"[ContextResolver] Resolved candidate comparison: {p_candidates[0].name} vs {p_candidates[1].name}")
+            else:
+                intent = "clarification_needed"
+                required_agents = []
+                clarification_reason = "missing_candidate_context"
+                logger.info("[ContextResolver] Candidate comparison failed: fewer than 2 candidates in context.")
+            if location is None:
+                location = LocationCoords(name="Kochi", latitude=9.9312, longitude=76.2673)
+
+        # Scenario 0b: Direct-Route Geofence Question ("Is there a restricted zone between me and that target?", "Does route to second target cross restricted zone?")
+        elif bool(
+            re.search(r"\brestricted\s+zone\b", text_lower) and
+            any(w in text_lower for w in ["between", "to that", "to the", "to target", "cross", "crosses", "intersects", "through", "ahead", "on the way"])
+        ):
+            ord_idx = cls.extract_ordinal_index(text_lower)
+            if ord_idx is not None:
+                if p_candidates and len(p_candidates) > ord_idx:
+                    p_pfz = p_candidates[ord_idx]
+                    target_ordinal = ord_idx
+                    intent = "pfz_geofence_check"
+                    required_agents = ["geospatial"]
+                else:
+                    intent = "clarification_needed"
+                    required_agents = []
+                    clarification_reason = "missing_candidate_context"
+            elif p_pfz is not None:
+                intent = "pfz_geofence_check"
+                required_agents = ["geospatial"]
+            elif p_candidates and len(p_candidates) > 0:
+                p_pfz = p_candidates[0]
+                target_ordinal = 0
+                intent = "pfz_geofence_check"
+                required_agents = ["geospatial"]
+            else:
+                intent = "clarification_needed"
+                required_agents = []
+                clarification_reason = "missing_referent_target"
+            if location is None:
+                location = LocationCoords(name="Kochi", latitude=9.9312, longitude=76.2673)
+
+        # Scenario 0c: Closest Target Query ("Which one is closest?", "Which target is closest?")
+        elif bool(
+            re.search(r"\bwhich\s+(?:one|target|pfz)?\s*is\s+(?:the\s+)?closest\b", text_lower) or
+            re.search(r"\bwhat\s+is\s+the\s+closest\s+(?:target|pfz|one)\b", text_lower) or
+            re.search(r"\bclosest\s+(?:one|target|pfz)\b", text_lower)
+        ):
+            if p_candidates and len(p_candidates) > 0:
+                p_pfz = p_candidates[0]
+                target_ordinal = 0
+                intent = "pfz_distance"
+                required_agents = []
+                logger.info(f"[ContextResolver] Resolved closest candidate -> PFZ: {p_pfz.name}")
+            elif p_pfz is not None:
+                intent = "pfz_distance"
+                required_agents = []
+            else:
+                intent = "clarification_needed"
+                required_agents = []
+                clarification_reason = "missing_candidate_context"
+
+        # Scenario 0d: Radial PFZ Filtering ("Show PFZ targets within 30 km of Kochi", "What PFZ targets are within 25 km?")
+        elif bool(
+            re.search(r"\b(?:within|under|less\s+than)\s+(\d+(?:\.\d+)?)\s*(?:km|kilometers|kilometres)\b", text_lower) or
+            re.search(r"\b(\d+(?:\.\d+)?)\s*(?:km|kilometers|kilometres)\s*(?:radius|range)\b", text_lower)
+        ) and any(w in text_lower for w in ["pfz", "target", "targets", "zone", "zones", "fishing"]):
+            match = (
+                re.search(r"\b(?:within|under|less\s+than)\s+(\d+(?:\.\d+)?)\s*(?:km|kilometers|kilometres)\b", text_lower) or
+                re.search(r"\b(\d+(?:\.\d+)?)\s*(?:km|kilometers|kilometres)\s*(?:radius|range)\b", text_lower)
+            )
+            radius_km = float(match.group(1)) if match else 30.0
+            intent = "pfz_radius_filter"
+            required_agents = ["geospatial"]
+            activity = activity or "fishing"
+            if location is None:
+                location = LocationCoords(name="Kochi", latitude=9.9312, longitude=76.2673)
+
+        # Scenario 1: Referent distance query ("How far is it?", "How far is the second one?")
+        elif is_referent_distance_query and not any(k in text_lower for k in KNOWN_LOCATIONS):
+            ord_idx = cls.extract_ordinal_index(text_lower)
+            if ord_idx is not None:
+                if p_candidates and len(p_candidates) > ord_idx:
+                    p_pfz = p_candidates[ord_idx]
+                    target_ordinal = ord_idx
+                    intent = "pfz_distance"
+                    required_agents = []
+                    logger.info(f"[ContextResolver] Resolved ordinal {ord_idx} -> PFZ: {p_pfz.name}")
+                else:
+                    intent = "clarification_needed"
+                    required_agents = []
+                    clarification_reason = "missing_candidate_context"
+            elif p_pfz is not None:
                 # Safely resolved from previous turn's selected PFZ
                 intent = "pfz_distance"
                 required_agents = []
@@ -263,23 +383,36 @@ class ContextResolver:
             required_agents = ["weather", "ocean", "geospatial"]
             activity = "fishing"
 
-        # Scenario 3: Follow-up modifier ("What about afternoon?", "What about tomorrow?", "What about Chellanam?")
+        # Scenario 3: Follow-up modifier ("What about afternoon?", "What about the second one?", "What about Chellanam?")
         elif is_followup_modifier and not any(w in text_lower for w in ["pfz", "fishing zone"]):
-            if p_intent:
-                intent = p_intent
+            ord_idx = cls.extract_ordinal_index(text_lower)
+            if ord_idx is not None:
+                if p_candidates and len(p_candidates) > ord_idx:
+                    p_pfz = p_candidates[ord_idx]
+                    target_ordinal = ord_idx
+                    intent = "pfz_distance"
+                    required_agents = []
+                    logger.info(f"[ContextResolver] Follow-up resolved ordinal {ord_idx} -> PFZ: {p_pfz.name}")
+                else:
+                    intent = "clarification_needed"
+                    required_agents = []
+                    clarification_reason = "missing_candidate_context"
             else:
-                intent = "marine_safety"
+                if p_intent:
+                    intent = p_intent
+                else:
+                    intent = "marine_safety"
 
-            if intent == "marine_safety":
-                required_agents = ["weather", "ocean", "geospatial"]
-            elif intent == "pfz_search":
-                required_agents = ["ocean", "geospatial"]
-            elif intent == "weather_query":
-                required_agents = ["weather"]
-            elif intent == "ocean_query":
-                required_agents = ["ocean"]
-            else:
-                required_agents = ["weather", "ocean", "geospatial"]
+                if intent == "marine_safety":
+                    required_agents = ["weather", "ocean", "geospatial"]
+                elif intent == "pfz_search" or intent == "pfz_radius_filter":
+                    required_agents = ["ocean", "geospatial"]
+                elif intent == "weather_query":
+                    required_agents = ["weather"]
+                elif intent == "ocean_query":
+                    required_agents = ["ocean"]
+                else:
+                    required_agents = ["weather", "ocean", "geospatial"]
 
         # Scenario 4: Explicit PFZ Search Query
         elif any(w in text_lower for w in ["pfz", "potential fishing zone", "where to fish", "fish zone", "fishing ground"]):
@@ -329,6 +462,9 @@ class ContextResolver:
             language_mode=language_mode,
             required_agents=required_agents,
             compare_windows=compare_windows,
+            radius_km=radius_km,
+            target_ordinal=target_ordinal,
+            compare_targets=compare_targets,
             clarification_reason=clarification_reason
         )
 
@@ -343,6 +479,9 @@ class ContextResolver:
             language_mode=language_mode,
             last_intent=intent if intent != "clarification_needed" else p_intent,
             selected_pfz=p_pfz,
+            candidate_pfzs=p_candidates,
+            compared_pfzs=p_compared,
+            pfz_comparison=p_pfz_comparison,
             active_route=p_route,
             temporal_comparison=prior_context.temporal_comparison if prior_context else None,
             route_risk=prior_context.route_risk if prior_context else None,

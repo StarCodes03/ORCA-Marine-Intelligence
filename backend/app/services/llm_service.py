@@ -125,12 +125,22 @@ class LLMService:
         vessel_type: Optional[str] = None,
         language_mode: str = "bilingual",
         temporal_comparison: Optional[Dict[str, Any]] = None,
-        route_risk: Optional[Dict[str, Any]] = None
+        route_risk: Optional[Dict[str, Any]] = None,
+        candidate_pfzs: Optional[List[Dict[str, Any]]] = None,
+        pfz_comparison: Optional[Dict[str, Any]] = None,
+        radius_km: Optional[float] = None,
+        target_ordinal: Optional[int] = None
     ) -> str:
         """Synthesize final conversational response following the prompt specification."""
         if intent == "clarification_needed":
             reason = clarification_reason or "missing_target"
-            if reason == "missing_referent_target":
+            if reason == "missing_candidate_context":
+                return (
+                    "No candidate PFZ targets are currently active in the conversation context to compare or reference. "
+                    "Please request a set of targets first (e.g., 'Show PFZ targets within 30 km of Kochi').\n\n"
+                    "> **Note:** Demonstration prototype — not for live navigation or marine safety."
+                )
+            elif reason == "missing_referent_target":
                 return (
                     "Could you clarify which destination or Potential Fishing Zone (PFZ) you would like to measure the distance to? "
                     "Please provide a coastal landing centre (e.g., Kochi, Chellanam, Vypin) or ask for the nearest PFZ.\n\n"
@@ -156,8 +166,9 @@ class LLMService:
         if intent == "pfz_distance":
             pfz = selected_pfz or (geospatial.get("nearest_pfz") if geospatial else None)
             if pfz:
+                target_desc = f"Target #{target_ordinal + 1}" if target_ordinal is not None else "The nearest PFZ target"
                 lines.append(
-                    f"The nearest PFZ target (**{pfz.get('name')}**) identified in your previous query is approximately "
+                    f"{target_desc} (**{pfz.get('name')}**) identified in your query is approximately "
                     f"**{pfz.get('distance_km')} km** offshore from **{loc_name}** (Bearing: **{pfz.get('bearing_deg')}°**)."
                 )
                 lines.append("")
@@ -242,7 +253,7 @@ class LLMService:
                 if geospatial.get("source_type") == "OFFICIAL_SNAPSHOT":
                     lines.append(f"• Advisory Date: {geospatial.get('advisory_date')} (Valid until: {geospatial.get('valid_until')})")
             else:
-                lines.append("No active PFZ points detected in the local demonstration database.")
+                lines.append("No PFZ targets detected in the local demonstration database.")
 
             if ocean:
                 lines.append("")
@@ -280,6 +291,76 @@ class LLMService:
                 lines.append(f"**Deterministic Recommendation:** {tc.get('recommendation')}")
                 lines.append("")
                 lines.append(f"> *Provenance:* {tc.get('provenance_notice')}")
+
+        elif intent == "pfz_radius_filter":
+            rad = radius_km if radius_km is not None else 30.0
+            cands = candidate_pfzs or (geospatial.get("candidate_pfzs", []) if geospatial else [])
+            lines.append(f"Historical Potential Fishing Zone (PFZ) targets within {rad:g} km of {loc_name}:")
+            lines.append("")
+            if cands:
+                lines.append(f"Found **{len(cands)}** historical candidate target(s) within {rad:g} km (sorted by distance):")
+                lines.append("")
+                for idx, c in enumerate(cands, 1):
+                    c_name = c.get("name")
+                    c_lc = c.get("landing_centre") or c_name
+                    c_dist = c.get("distance_km")
+                    c_bearing = c.get("bearing_deg")
+                    c_depth = f", Depth: ~{c.get('depth_m')}m" if c.get("depth_m") is not None else ""
+                    lines.append(f"{idx}. **{c_name}** ({c_lc}) — **{c_dist} km** (Bearing: **{c_bearing}°**{c_depth})")
+                lines.append("")
+                lines.append("• *Historical snapshot notice:* Targets retrieved from official historical INCOIS Kerala snapshot. Proximity does not imply biological suitability or active fish presence.")
+                lines.append("• *Unavailable snapshot fields:* SST, chlorophyll-a, target species, confidence score, fish abundance.")
+            else:
+                lines.append(f"No historical PFZ targets found within {rad:g} km of {loc_name} in the snapshot database.")
+                if geospatial and geospatial.get("nearest_pfz"):
+                    npfz = geospatial["nearest_pfz"]
+                    lines.append(f"• Closest available snapshot target is **{npfz.get('name')}** at **{npfz.get('distance_km')} km**.")
+
+        elif intent == "pfz_comparison":
+            lines.append(f"Comparative analysis of historical PFZ candidate targets from {loc_name}:")
+            lines.append("")
+            comp = pfz_comparison or (geospatial.get("pfz_comparison") if geospatial else None)
+            if comp:
+                t_a = comp.get("target_a", {})
+                t_b = comp.get("target_b", {})
+                lines.append(f"**Target Comparison: {t_a.get('name')} vs {t_b.get('name')}**")
+                lines.append(f"• Distance from {loc_name}:")
+                lines.append(f"  - **{t_a.get('name')}**: {t_a.get('distance_km')} km (Bearing: {t_a.get('bearing_deg')}°)")
+                lines.append(f"  - **{t_b.get('name')}**: {t_b.get('distance_km')} km (Bearing: {t_b.get('bearing_deg')}°)")
+                lines.append(f"  - Delta: **{comp.get('distance_difference_km')} km** difference (Closer target: **{comp.get('closer_target')}**)")
+                if comp.get("bearing_difference_deg") is not None:
+                    lines.append(f"• Bearing Difference: **{comp.get('bearing_difference_deg')}°**")
+                lines.append(f"• {comp.get('depth_comparison')}")
+                lines.append(f"• Direct Route Restricted Zone Intersection:")
+                lines.append(f"  - **{t_a.get('name')}**: {comp.get('geofence_status_a')} ({', '.join(comp.get('intersected_zones_a', [])) if comp.get('intersected_zones_a') else 'no restricted zones'})")
+                lines.append(f"  - **{t_b.get('name')}**: {comp.get('geofence_status_b')} ({', '.join(comp.get('intersected_zones_b', [])) if comp.get('intersected_zones_b') else 'no restricted zones'})")
+                lines.append("")
+                lines.append(f"• *Explicitly Unavailable Snapshot Fields:* {', '.join(comp.get('unavailable_fields', []))}")
+                lines.append(f"> *Candidate Comparison Notice:* {comp.get('disclaimer')}")
+            else:
+                lines.append("Insufficient candidate targets in context to perform comparison.")
+
+        elif intent == "pfz_geofence_check":
+            target = selected_pfz or (geospatial.get("nearest_pfz") if geospatial else None)
+            target_name = target.get("name", "Candidate Target") if target else "Candidate Target"
+            target_dist = target.get("distance_km", "N/A") if target else "N/A"
+            gf_status = geospatial.get("direct_route_geofence_status", "CLEAR") if geospatial else "CLEAR"
+            gf_zones = geospatial.get("direct_route_intersected_zones", []) if geospatial else []
+
+            lines.append(f"Direct straight-line restricted zone assessment from {loc_name} to **{target_name}** ({target_dist} km):")
+            lines.append("")
+            if gf_status == "INTERSECTS_RESTRICTED_ZONE" or len(gf_zones) > 0:
+                lines.append("⚠️ **RESTRICTED ZONE INTERSECTION DETECTED**")
+                lines.append(f"A straight-line transit to **{target_name}** intersects the following restricted maritime zone(s):")
+                for z in gf_zones:
+                    lines.append(f"• **{z}**")
+                lines.append("")
+                lines.append("Direct passage is **not recommended** through active security perimeters. Use the safe passage corridor routing engine to calculate clearance waypoints around restricted zones.")
+            else:
+                lines.append("✅ **DIRECT ROUTE CLEAR**")
+                lines.append(f"A straight-line transit from {loc_name} to **{target_name}** does not intersect any charted restricted naval or port security perimeters.")
+            lines.append("")
+            lines.append("> *Navigational Notice:* Deterministic 2D line-polygon intersection evaluation against charted restricted zones. Does not represent live vessel traffic or oceanographic sea state.")
 
         elif intent == "safe_passage_route":
             lines.append(f"Safe passage corridor analysis for {loc_name} ({time_display}):")
@@ -368,6 +449,12 @@ class LLMService:
             lines.append("• PROTOTYPE_ROUTE_RISK_ENGINE (DERIVED_CALCULATION)")
         if temporal_comparison:
             lines.append("• TEMPORAL_REASONING_ENGINE (DERIVED_CALCULATION)")
+        if intent == "pfz_radius_filter":
+            lines.append("• SPATIAL_CANDIDATE_FILTER (DERIVED_CALCULATION)")
+        elif intent == "pfz_comparison":
+            lines.append("• CANDIDATE_COMPARISON_ENGINE (DERIVED_CALCULATION)")
+        elif intent == "pfz_geofence_check":
+            lines.append("• DIRECT_ROUTE_GEOFENCE_ENGINE (DERIVED_CALCULATION)")
         lines.append("• RULE_BASED_RISK_ENGINE")
 
         lines.append("")
@@ -391,7 +478,12 @@ class LLMService:
         transit_route: Optional[Dict[str, Any]] = None,
         vessel_type: Optional[str] = None,
         temporal_comparison: Optional[Dict[str, Any]] = None,
-        route_risk: Optional[Dict[str, Any]] = None
+        route_risk: Optional[Dict[str, Any]] = None,
+        candidate_pfzs: Optional[List[Dict[str, Any]]] = None,
+        pfz_comparison: Optional[Dict[str, Any]] = None,
+        selected_pfz: Optional[Dict[str, Any]] = None,
+        radius_km: Optional[float] = None,
+        target_ordinal: Optional[int] = None
     ) -> str:
         """Synthesize authentic coastal Kerala Malayalam operational advisory."""
         loc_name = location.get("name", "കൊച്ചി") if location else "കൊച്ചി"
@@ -485,7 +577,53 @@ class LLMService:
             lines.append(f"• മുഖ്യ ഘടകം: {str(rr.get('limiting_factor', '')).replace('_', ' ')}")
             lines.append("> *ശ്രദ്ധിക്കുക: റൂട്ട് റിസ്ക് സൂചിക പരീക്ഷണാർത്ഥമുള്ള പ്രോട്ടോടൈപ്പ് മാതൃക മാത്രമാണ്; ഔദ്യോഗിക സുരക്ഷാ റേറ്റിംഗല്ല.*")
 
-        if geospatial and geospatial.get("nearest_pfz"):
+        if intent == "pfz_radius_filter":
+            rad = radius_km if radius_km is not None else 30.0
+            cands = candidate_pfzs or (geospatial.get("candidate_pfzs", []) if geospatial else [])
+            lines.append("")
+            lines.append(f"**സാധ്യതാ മത്സ്യബന്ധന മേഖലകൾ ({loc_name} - {rad:g} കി.മീ പരിധിയിൽ):**")
+            if cands:
+                lines.append(f"കണ്ടെത്തിയ ലക്ഷ്യങ്ങൾ ({len(cands)} എണ്ണം):")
+                for idx, c in enumerate(cands, 1):
+                    lines.append(f"{idx}. **{c.get('name')}** ({c.get('landing_centre') or ''}) — **{c.get('distance_km')} കി.മീ** അകലെ (ദിശ: {c.get('bearing_deg')}°)")
+                lines.append("")
+                lines.append("• *ശ്രദ്ധിക്കുക: ചരിത്രപരമായ INCOIS ഡാറ്റാബേസിൽ നിന്നുള്ള വിവരങ്ങൾ മാത്രമാണ്; തത്സമയ മത്സ്യ ലഭ്യത ഉറപ്പുനൽകുന്നില്ല.*")
+            else:
+                lines.append(f"{rad:g} കി.മീ പരിധിയിൽ PFZ ലക്ഷ്യങ്ങൾ ലഭ്യമല്ല.")
+
+        elif intent == "pfz_comparison":
+            comp = pfz_comparison or (geospatial.get("pfz_comparison") if geospatial else None)
+            if comp:
+                t_a = comp.get("target_a", {})
+                t_b = comp.get("target_b", {})
+                lines.append("")
+                lines.append(f"**PFZ ലക്ഷ്യങ്ങളുടെ താരതമ്യം ({t_a.get('name')} vs {t_b.get('name')}):**")
+                lines.append(f"• ദൂരം: {t_a.get('name')} ({t_a.get('distance_km')} കി.മീ) vs {t_b.get('name')} ({t_b.get('distance_km')} കി.മീ)")
+                lines.append(f"• വ്യത്യാസം: **{comp.get('distance_difference_km')} കി.മീ** (അടുത്തുള്ള ലക്ഷ്യം: **{comp.get('closer_target')}**)")
+                lines.append(f"• നിരോധിത മേഖല പരിശോധന: {t_a.get('name')}={comp.get('geofence_status_a')}, {t_b.get('name')}={comp.get('geofence_status_b')}")
+                lines.append("> *ശ്രദ്ധിക്കുക: ലഭ്യമായ ചരിത്ര വിവരങ്ങൾ മാത്രമാണ് താരതമ്യം ചെയ്തിട്ടുള്ളത്.*")
+
+        elif intent == "pfz_geofence_check":
+            target = selected_pfz or (geospatial.get("nearest_pfz") if geospatial else None)
+            target_name = target.get("name", "ലക്ഷ്യം") if target else "ലക്ഷ്യം"
+            gf_status = geospatial.get("direct_route_geofence_status", "CLEAR") if geospatial else "CLEAR"
+            gf_zones = geospatial.get("direct_route_intersected_zones", []) if geospatial else []
+            lines.append("")
+            lines.append(f"**നേർരേഖാ സുരക്ഷാ പരിശോധന ({target_name} ലേക്ക്):**")
+            if gf_status == "INTERSECTS_RESTRICTED_ZONE" or len(gf_zones) > 0:
+                lines.append(f"• ⚠️ **മുന്നറിയിപ്പ്:** {target_name} ലേക്കുള്ള നേർരേഖ നിരോധിത മേഖലയിലൂടെ കടന്നുപോകുന്നു ({', '.join(gf_zones)}).")
+                lines.append("• നേർവഴി ഒഴിവാക്കി സുരക്ഷിത പാത ഉപയോഗിക്കുക.")
+            else:
+                lines.append(f"• ✅ **സുരക്ഷിതം:** {target_name} ലേക്കുള്ള നേർവഴിയിൽ നിരോധിത മേഖലകൾ ഇല്ല.")
+
+        elif intent == "pfz_distance":
+            pfz = selected_pfz or (geospatial.get("nearest_pfz") if geospatial else None)
+            if pfz:
+                target_desc = f"ലക്ഷ്യം #{target_ordinal + 1}" if target_ordinal is not None else "അടുത്തുള്ള PFZ ലക്ഷ്യം"
+                lines.append("")
+                lines.append(f"**{target_desc} ({pfz.get('name')}):** {loc_name} തീരത്തുനിന്ന് ഏകദേശം **{pfz.get('distance_km')} കി.മീ** അകലെ (ദിശ: {pfz.get('bearing_deg')}°).")
+
+        elif geospatial and geospatial.get("nearest_pfz"):
             npfz = geospatial["nearest_pfz"]
             lines.append("")
             lines.append(f"**സാധ്യതാ മത്സ്യബന്ധന മേഖല (PFZ):** {npfz.get('name')} ({npfz.get('distance_km')} കി.മീ അകലെ)")

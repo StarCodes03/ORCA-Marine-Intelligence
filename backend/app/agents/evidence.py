@@ -17,7 +17,9 @@ from app.models.schemas import (
     ConversationContext,
     TransitRoute,
     TemporalComparisonResult,
-    RouteRiskAssessment
+    RouteRiskAssessment,
+    NearestPFZ,
+    PFZComparisonResult
 )
 from app.services.llm_service import llm_service
 
@@ -42,7 +44,9 @@ class EvidenceAgent:
         context: Optional[ConversationContext] = None,
         transit_route: Optional[TransitRoute] = None,
         temporal_comparison: Optional[TemporalComparisonResult] = None,
-        route_risk: Optional[RouteRiskAssessment] = None
+        route_risk: Optional[RouteRiskAssessment] = None,
+        candidate_pfzs: Optional[List[NearestPFZ]] = None,
+        pfz_comparison: Optional[PFZComparisonResult] = None
     ) -> Dict[str, Any]:
         """Produce structured evidence breakdown and final conversational message."""
         logger.info(f"[{self.AGENT_NAME}] Synthesizing multi-agent outputs.")
@@ -68,7 +72,15 @@ class EvidenceAgent:
             ml_clarification = (
                 "ദയവായി ഒരു കടലോര കേന്ദ്രം (ഉദാഹരണത്തിന്: കൊച്ചി, ചെല്ലാനം, വൈപ്പിൻ) വ്യക്തമാക്കുക."
                 if reason == "missing_location"
-                else "ദയവായി കൂടുതൽ വിവരങ്ങൾ നൽകുക."
+                else (
+                    "താരതമ്യം ചെയ്യാനോ പരിശോധിക്കാനോ നിലവിൽ PFZ ലക്ഷ്യങ്ങൾ ലഭ്യമല്ല. ദയവായി ആദ്യം 'Show PFZ targets within 30 km of Kochi' എന്ന് നൽകുക."
+                    if reason == "missing_candidate_context"
+                    else (
+                        "ദയവായി ഏത് ലക്ഷ്യത്തിലേക്കുള്ള ദൂരമാണ് കണക്കാക്കേണ്ടതെന്ന് വ്യക്തമാക്കുക."
+                        if reason == "missing_referent_target"
+                        else "ദയവായി കൂടുതൽ വിവരങ്ങൾ നൽകുക."
+                    )
+                )
             )
             if lang_mode == "malayalam":
                 return {
@@ -283,9 +295,68 @@ class EvidenceAgent:
                 raw_data=route_risk.model_dump()
             ))
 
-        # 8. Conversational response generation with language mode handling
+        # 8. Deterministic PFZ candidate reasoning evidence (M5 Step 3)
+        if planner_plan.intent == "pfz_radius_filter":
+            cands = candidate_pfzs or (geospatial.candidate_pfzs if geospatial else [])
+            rad = planner_plan.radius_km or 30.0
+            loc_name = planner_plan.location.name if planner_plan.location else "Kochi"
+            evidence_items.append(EvidenceItem(
+                category="derived_calculation",
+                claim=f"Mathematical radial filter: Identified {len(cands)} historical INCOIS PFZ target(s) within {rad} km of {loc_name}.",
+                source="SPATIAL_CANDIDATE_FILTER",
+                raw_data={
+                    "radius_km": rad,
+                    "count": len(cands),
+                    "targets": [c.model_dump() for c in cands]
+                }
+            ))
+
+        comp = pfz_comparison or (geospatial.pfz_comparison if geospatial else None)
+        if comp and planner_plan.intent == "pfz_comparison":
+            evidence_items.append(EvidenceItem(
+                category="derived_calculation",
+                claim=(
+                    f"Candidate comparison: {comp.target_a.name} ({comp.target_a.distance_km} km) vs "
+                    f"{comp.target_b.name} ({comp.target_b.distance_km} km). "
+                    f"Closer target: {comp.closer_target}. Distance diff: {comp.distance_difference_km} km. "
+                    f"Geofence statuses: {comp.target_a.name}={comp.geofence_status_a}, {comp.target_b.name}={comp.geofence_status_b}."
+                ),
+                source="CANDIDATE_COMPARISON_ENGINE",
+                raw_data=comp.model_dump()
+            ))
+
+        if planner_plan.intent == "pfz_geofence_check":
+            gf_status = (geospatial.direct_route_geofence_status if geospatial else None) or "CLEAR"
+            gf_zones = (geospatial.direct_route_intersected_zones if geospatial else [])
+            target_name = (
+                context.selected_pfz.name if (context and context.selected_pfz)
+                else (geospatial.nearest_pfz.name if (geospatial and geospatial.nearest_pfz) else "Target PFZ")
+            )
+            loc_name = planner_plan.location.name if planner_plan.location else "Kochi"
+            evidence_items.append(EvidenceItem(
+                category="derived_calculation",
+                claim=(
+                    f"Direct-route geofence check from {loc_name} to {target_name}: "
+                    f"Status '{gf_status}', intersected zones: {', '.join(gf_zones) if gf_zones else 'none'}."
+                ),
+                source="DIRECT_ROUTE_GEOFENCE_ENGINE",
+                raw_data={
+                    "status": gf_status,
+                    "intersected_zones": gf_zones,
+                    "target": target_name
+                }
+            ))
+
+        # 9. Conversational response generation with language mode handling
         lang_mode = planner_plan.language_mode or (context.language_mode if context else "bilingual")
         v_type = planner_plan.vessel_type or (context.vessel_type if context else (risk.vessel_type if risk else None))
+
+        active_cands = [c.model_dump() for c in (candidate_pfzs or (geospatial.candidate_pfzs if geospatial else []))]
+        active_comp = comp.model_dump() if comp else None
+        active_target = (
+            context.selected_pfz.model_dump() if (context and context.selected_pfz)
+            else (geospatial.nearest_pfz.model_dump() if (geospatial and geospatial.nearest_pfz) else None)
+        )
 
         final_answer_en = self.llm.synthesize_response(
             intent=planner_plan.intent,
@@ -299,7 +370,12 @@ class EvidenceAgent:
             vessel_type=v_type,
             language_mode=lang_mode,
             temporal_comparison=temporal_comparison.model_dump() if temporal_comparison else None,
-            route_risk=route_risk.model_dump() if route_risk else None
+            route_risk=route_risk.model_dump() if route_risk else None,
+            candidate_pfzs=active_cands,
+            pfz_comparison=active_comp,
+            selected_pfz=active_target,
+            radius_km=planner_plan.radius_km,
+            target_ordinal=planner_plan.target_ordinal
         )
 
         final_answer_ml = self.llm.synthesize_malayalam_advisory(
@@ -313,7 +389,12 @@ class EvidenceAgent:
             transit_route=transit_route.model_dump() if transit_route else None,
             vessel_type=v_type,
             temporal_comparison=temporal_comparison.model_dump() if temporal_comparison else None,
-            route_risk=route_risk.model_dump() if route_risk else None
+            route_risk=route_risk.model_dump() if route_risk else None,
+            candidate_pfzs=active_cands,
+            pfz_comparison=active_comp,
+            selected_pfz=active_target,
+            radius_km=planner_plan.radius_km,
+            target_ordinal=planner_plan.target_ordinal
         )
 
         if lang_mode == "malayalam":

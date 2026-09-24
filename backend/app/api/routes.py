@@ -105,11 +105,25 @@ def handle_chat(request: ChatRequest):
 
         evidence_list = [EvidenceItem(**item) for item in final_state.get("evidence_items", [])]
 
+        # Extract candidate PFZs and comparison
+        candidate_pfzs = (
+            geospatial.candidate_pfzs
+            if geospatial and geospatial.candidate_pfzs
+            else (context.candidate_pfzs if context and context.candidate_pfzs else [])
+        )
+        pfz_comparison = (
+            geospatial.pfz_comparison
+            if geospatial and geospatial.pfz_comparison
+            else (context.pfz_comparison if context and context.pfz_comparison else None)
+        )
+
         # Spatial features bundle for instant map visualization
         spatial_features = {
             "user_location": location.model_dump() if location else None,
             "nearest_pfz": geospatial.nearest_pfz.model_dump() if geospatial and geospatial.nearest_pfz else None,
             "all_pfzs": [pfz.model_dump() for pfz in geospatial.all_pfzs] if geospatial else [],
+            "candidate_pfzs": [pfz.model_dump() for pfz in candidate_pfzs],
+            "pfz_comparison": pfz_comparison.model_dump() if pfz_comparison else None,
             "restricted_zone_status": geospatial.restricted_zone_check.model_dump() if geospatial else None,
             "route": transit_route.geojson_feature if transit_route else None
         }
@@ -127,6 +141,8 @@ def handle_chat(request: ChatRequest):
             vessel_profile=vessel_profile,
             temporal_comparison=temporal_comparison,
             route_risk=route_risk,
+            candidate_pfzs=candidate_pfzs,
+            pfz_comparison=pfz_comparison,
             evidence=evidence_list,
             agent_trace=final_state.get("agent_trace", []),
             spatial_features=spatial_features,

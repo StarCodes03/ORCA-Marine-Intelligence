@@ -6,9 +6,11 @@ mock data upon network failure, timeout, or invalid response.
 """
 
 from typing import Dict, Any, Optional, List
+from datetime import datetime, timezone
 import os
 import logging
 import httpx
+from app.tools.marine_cache import marine_cache
 
 logger = logging.getLogger("orca.tools.ocean")
 
@@ -48,12 +50,23 @@ class MockOceanDataAdapter:
 
         state = cls.DEFAULT_OCEAN_STATE.copy()
 
+        units = {
+            "wave_height": {"value": state["wave_height_m"], "unit": "m"},
+            "wave_direction": {"value": state.get("primary_swell_direction_deg"), "unit": "deg"},
+            "wave_period": {"value": state.get("wave_period_s"), "unit": "s"},
+            "sea_surface_temperature": {"value": state["sst_c"], "unit": "°C"},
+            "current_speed": {"value": state["current_speed_knots"], "unit": "knots"},
+            "sea_level_height": {"value": None, "unit": "m"},
+        }
+
         return {
             "source": cls.SOURCE_NAME,
             "location": location_name,
             "latitude": latitude,
             "longitude": longitude,
             "forecast_time": time_range,
+            "forecast_timestamp": None,
+            "retrieved_at": None,
             "sst_c": state["sst_c"],
             "wave_height_m": state["wave_height_m"],
             "sea_state": state["sea_state"],
@@ -64,6 +77,7 @@ class MockOceanDataAdapter:
             "wave_period_s": state["wave_period_s"],
             "wave_direction_deg": state["primary_swell_direction_deg"],
             "is_mock": True,
+            "units": units,
             "notice": "DEMONSTRATION OCEANOGRAPHIC DATA ONLY."
         }
 
@@ -128,6 +142,11 @@ class OpenMeteoMarineAdapter:
         time_range: str = "tomorrow_morning"
     ) -> Dict[str, Any]:
         """Fetch live oceanographic telemetry from Open-Meteo Marine API."""
+        # Check in-memory cache before performing HTTP call
+        cached = marine_cache.get("ocean", latitude, longitude, time_range)
+        if cached:
+            return cached
+
         params = {
             "latitude": latitude,
             "longitude": longitude,
@@ -145,6 +164,9 @@ class OpenMeteoMarineAdapter:
             response = client.get(cls.BASE_URL, params=params)
             response.raise_for_status()
             data = response.json()
+
+        # Capture actual machine time when live HTTP response successfully returned
+        retrieved_at = datetime.now(timezone.utc).isoformat()
 
         if "hourly" not in data or "time" not in data["hourly"]:
             raise ValueError("Open-Meteo marine response missing 'hourly.time' series.")
@@ -195,13 +217,24 @@ class OpenMeteoMarineAdapter:
         # Chlorophyll is NOT provided by Open-Meteo. Do NOT fabricate (Requirement 8).
         chlorophyll_mg_m3: Optional[float] = None
 
-        return {
+        units = {
+            "wave_height": {"value": wave_height, "unit": "m"},
+            "wave_direction": {"value": wave_direction, "unit": "deg"},
+            "wave_period": {"value": wave_period, "unit": "s"},
+            "sea_surface_temperature": {"value": sst_c, "unit": "°C"},
+            "current_speed": {"value": current_speed_knots, "unit": "knots"},
+            "current_direction": {"value": current_direction, "unit": "deg"},
+            "sea_level_height": {"value": sea_level_m, "unit": "m"},
+        }
+
+        result = {
             "source": cls.SOURCE_NAME,
             "location": location_name,
             "latitude": latitude,
             "longitude": longitude,
             "forecast_time": time_range,
             "forecast_timestamp": forecast_timestamp,
+            "retrieved_at": retrieved_at,
             "sst_c": sst_c,
             "wave_height_m": wave_height,
             "wave_direction_deg": wave_direction,
@@ -215,15 +248,22 @@ class OpenMeteoMarineAdapter:
             "current_speed_knots": current_speed_knots,
             "current_direction_deg": current_direction,
             "is_mock": False,
+            "units": units,
             "raw_metadata": {
                 "provider": "Open-Meteo Marine",
                 "api_endpoint": cls.BASE_URL,
                 "queried_coordinates": [latitude, longitude],
                 "resolved_forecast_timestamp": forecast_timestamp,
+                "retrieved_at": retrieved_at,
                 "sea_level_height_msl": sea_level_m,
                 "chlorophyll_notice": "Chlorophyll data is not provided by Open-Meteo Marine API and is marked as unsupported."
             }
         }
+
+        # Cache successful live payload
+        marine_cache.set("ocean", latitude, longitude, time_range, result)
+
+        return result
 
 
 class OceanDataAdapter:

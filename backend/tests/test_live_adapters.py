@@ -18,6 +18,15 @@ from app.models.schemas import LocationCoords, WeatherData, OceanData
 from app.agents.risk import RiskAssessmentAgent
 from app.agents.evidence import EvidenceAgent
 from app.models.schemas import PlannerOutput
+from app.tools.marine_cache import marine_cache
+
+
+@pytest.fixture(autouse=True)
+def clean_marine_cache():
+    """Ensure every test executes with an isolated, clean telemetry cache."""
+    marine_cache.clear()
+    yield
+    marine_cache.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +99,23 @@ def test_weather_adapter_live_parsing_mocked_http():
     assert res["visibility_km"] == 9.5
     assert "rain showers" in res["weather_condition"].lower()
 
+    # Data hardening: retrieved_at exists and is separate from forecast_timestamp
+    assert res.get("retrieved_at") is not None
+    assert res.get("forecast_timestamp") is not None
+    assert res["retrieved_at"] != res["forecast_timestamp"]
+
+    # Data hardening: explicit units metadata present
+    assert "units" in res and res["units"] is not None
+    assert res["units"]["wind_speed"] == {"value": 12.5, "unit": "km/h"}
+    assert res["units"]["temperature"] == {"value": 28.2, "unit": "°C"}
+    assert res["units"]["rain_probability"] == {"value": 35.0, "unit": "%"}
+
+    # Pydantic schema validation
+    w_model = WeatherData(**res)
+    assert w_model.retrieved_at is not None
+    assert w_model.forecast_timestamp is not None
+    assert w_model.units["wind_speed"]["value"] == 12.5
+
     # Requirement 1 & 8: Lightning must be marked unsupported, not fabricated
     assert res["lightning_risk"] == "unsupported"
     assert "raw_metadata" in res
@@ -161,6 +187,23 @@ def test_marine_adapter_live_parsing_mocked_http():
     assert res["wave_period_s"] == 8.2
     assert res["sst_c"] == 29.2
     assert res["current_speed_knots"] == 1.5  # 2.78 km/h / 1.852 ≈ 1.5 knots
+
+    # Data hardening: retrieved_at exists and is separate from forecast_timestamp
+    assert res.get("retrieved_at") is not None
+    assert res.get("forecast_timestamp") is not None
+    assert res["retrieved_at"] != res["forecast_timestamp"]
+
+    # Data hardening: explicit units metadata present
+    assert "units" in res and res["units"] is not None
+    assert res["units"]["wave_height"] == {"value": 1.4, "unit": "m"}
+    assert res["units"]["sea_surface_temperature"] == {"value": 29.2, "unit": "°C"}
+    assert res["units"]["current_speed"] == {"value": 1.5, "unit": "knots"}
+
+    # Pydantic schema validation
+    o_model = OceanData(**res)
+    assert o_model.retrieved_at is not None
+    assert o_model.forecast_timestamp is not None
+    assert o_model.units["wave_height"]["value"] == 1.4
 
     # Requirement 2: Forecast sea-level trend tide label
     assert "rising (forecast sea-level trend)" in res["tide"]
@@ -262,3 +305,158 @@ def test_unsupported_lightning_does_not_score_and_is_not_treated_as_low():
 
     weather_evidence = next(e for e in synth["evidence"] if "Wind speed" in e.claim)
     assert "Lightning risk was not provided by the selected live source" in weather_evidence.claim
+
+
+# ---------------------------------------------------------------------------
+# Data-Layer Hardening: Caching, Units & Terminology Tests
+# ---------------------------------------------------------------------------
+
+def test_cache_hit_avoids_second_http_request():
+    """Verify in-memory cache hit prevents a second outbound HTTP call."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = SAMPLE_WEATHER_API_RESPONSE
+
+    with patch.object(httpx.Client, "get", return_value=mock_resp) as mock_get:
+        # First call: cache miss, triggers HTTP call
+        res1 = OpenMeteoWeatherAdapter.fetch_forecast("Kochi", 9.9312, 76.2673, "tomorrow_morning")
+        assert mock_get.call_count == 1
+        assert res1["is_mock"] is False
+
+        # Second call with identical params: cache hit, no HTTP call
+        res2 = OpenMeteoWeatherAdapter.fetch_forecast("Kochi", 9.9312, 76.2673, "tomorrow_morning")
+        assert mock_get.call_count == 1  # Still 1!
+        assert res2["wind_speed_kmh"] == res1["wind_speed_kmh"]
+        assert res2["retrieved_at"] == res1["retrieved_at"]
+
+
+def test_cache_expiration_causes_fresh_request():
+    """Verify expired cache entries trigger a fresh outbound HTTP request."""
+    import time
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = SAMPLE_WEATHER_API_RESPONSE
+
+    # Temporarily set TTL to 0.05s
+    original_ttl = marine_cache.ttl_seconds
+    marine_cache.ttl_seconds = 0.05
+    try:
+        with patch.object(httpx.Client, "get", return_value=mock_resp) as mock_get:
+            res1 = OpenMeteoWeatherAdapter.fetch_forecast("Kochi", 9.9312, 76.2673, "tomorrow_morning")
+            assert mock_get.call_count == 1
+
+            # Sleep longer than TTL to expire the cache
+            time.sleep(0.06)
+
+            # Fresh request must be triggered
+            res2 = OpenMeteoWeatherAdapter.fetch_forecast("Kochi", 9.9312, 76.2673, "tomorrow_morning")
+            assert mock_get.call_count == 2
+    finally:
+        marine_cache.ttl_seconds = original_ttl
+
+
+def test_fallback_data_does_not_overwrite_live_cached_data():
+    """Verify fallback or mock payloads never overwrite live cache entries."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = SAMPLE_WEATHER_API_RESPONSE
+
+    # Populate cache with live response
+    with patch.object(httpx.Client, "get", return_value=mock_resp):
+        live_res = OpenMeteoWeatherAdapter.fetch_forecast("Kochi", 9.9312, 76.2673, "tomorrow_morning")
+
+    cached_before = marine_cache.get("weather", 9.9312, 76.2673, "tomorrow_morning")
+    assert cached_before is not None
+    assert cached_before["is_mock"] is False
+
+    # Attempt to write mock fallback data
+    fallback_payload = MockWeatherDataAdapter.get_forecast("Kochi", 9.9312, 76.2673, "tomorrow_morning")
+    fallback_payload["is_fallback"] = True
+    marine_cache.set("weather", 9.9312, 76.2673, "tomorrow_morning", fallback_payload)
+
+    # Verify cache still holds the live data, not the fallback
+    cached_after = marine_cache.get("weather", 9.9312, 76.2673, "tomorrow_morning")
+    assert cached_after["is_mock"] is False
+    assert cached_after["wind_speed_kmh"] == live_res["wind_speed_kmh"]
+
+
+def test_retrieved_at_is_none_for_mock_and_fallback():
+    """Verify retrieved_at is explicitly None for mock datasets and failure fallbacks."""
+    # Direct mock weather
+    mock_w = MockWeatherDataAdapter.get_forecast("Kochi", 9.9312, 76.2673, "tomorrow_morning")
+    assert mock_w["retrieved_at"] is None
+    assert mock_w["is_mock"] is True
+
+    # Direct mock ocean
+    mock_o = MockOceanDataAdapter.get_ocean_conditions("Kochi Offshore", 9.9312, 76.2673, "tomorrow_morning")
+    assert mock_o["retrieved_at"] is None
+    assert mock_o["is_mock"] is True
+
+    # Failure fallback through WeatherDataAdapter
+    with patch.object(httpx.Client, "get", side_effect=httpx.ConnectError("Offline")):
+        fallback_w = WeatherDataAdapter.get_forecast("Kochi", 9.9312, 76.2673, "tomorrow_morning")
+    assert fallback_w["retrieved_at"] is None
+    assert fallback_w["is_mock"] is True
+    assert fallback_w["is_fallback"] is True
+
+
+def test_pfz_prohibited_terminology_cleanup():
+    """Verify prohibited terms (active PFZ, best PFZ, current PFZ) are not used in generated responses."""
+    from app.services.llm_service import llm_service
+
+    # When no PFZ targets are present
+    response = llm_service.synthesize_response(
+        intent="pfz_search",
+        location={"name": "Kochi"},
+        time_range="tomorrow_morning",
+        geospatial={},
+        selected_pfz=None
+    )
+
+    assert "No PFZ targets detected in the local demonstration database." in response
+    assert "No active PFZ points detected" not in response
+    assert "active pfz" not in response.lower()
+    assert "best pfz" not in response.lower()
+    assert "current pfz" not in response.lower()
+    assert "high-probability pfz" not in response.lower()
+
+
+def test_weather_and_ocean_units_schema_validation():
+    """Verify WeatherData and OceanData schemas parse and expose structured unit metadata."""
+    w = WeatherData(
+        source="OPEN_METEO_WEATHER",
+        location="Kochi",
+        forecast_time="tomorrow_morning",
+        forecast_timestamp="2026-09-24T08:00",
+        retrieved_at="2026-09-23T16:00:00Z",
+        wind_speed_kmh=18.5,
+        rain_probability=20.0,
+        units={
+            "wind_speed": {"value": 18.5, "unit": "km/h"},
+            "rain_probability": {"value": 20.0, "unit": "%"}
+        }
+    )
+    assert w.units["wind_speed"]["value"] == 18.5
+    assert w.units["wind_speed"]["unit"] == "km/h"
+    assert w.retrieved_at == "2026-09-23T16:00:00Z"
+    assert w.forecast_timestamp == "2026-09-24T08:00"
+
+    o = OceanData(
+        source="OPEN_METEO_MARINE",
+        location="Kochi Offshore",
+        sst_c=29.1,
+        wave_height_m=1.2,
+        sea_state="slight",
+        tide="rising",
+        retrieved_at="2026-09-23T16:00:00Z",
+        forecast_timestamp="2026-09-24T08:00",
+        units={
+            "wave_height": {"value": 1.2, "unit": "m"},
+            "sea_surface_temperature": {"value": 29.1, "unit": "°C"}
+        }
+    )
+    assert o.units["wave_height"]["value"] == 1.2
+    assert o.units["wave_height"]["unit"] == "m"
+    assert o.retrieved_at == "2026-09-23T16:00:00Z"
+    assert o.forecast_timestamp == "2026-09-24T08:00"
+

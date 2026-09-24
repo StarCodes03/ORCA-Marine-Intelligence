@@ -25,7 +25,12 @@ def clean_conversation_store():
         "test-m5-temporal",
         "test-m5-route-risk",
         "test-m5-multi-turn",
-        "test-m5-ml-temporal"
+        "test-m5-ml-temporal",
+        "test-m5-candidates",
+        "test-m5-radial",
+        "test-m5-safe-fail",
+        "test-m5-ordinal-fail",
+        "test-m5-geofence"
     ]
     for sid in test_sessions:
         conversation_store.clear_context(sid)
@@ -155,3 +160,163 @@ def test_multi_turn_temporal_and_route_risk_context_retention():
     assert ctx2["vessel_type"] == "traditional_craft"
     assert ctx2["route_risk"] is not None
     assert ctx2["temporal_comparison"] is not None
+
+
+def test_radial_filter_api_integration():
+    """Verify end-to-end radial PFZ candidate filtering:
+    - Filters targets within specified radius
+    - Sorts targets by distance ascending
+    - Emits SPATIAL_CANDIDATE_FILTER evidence claim
+    - Enforces snapshot notice and unavailable fields
+    """
+    res = client.post("/api/chat", json={
+        "message": "Show PFZ targets within 30 km of Kochi",
+        "conversation_id": "test-m5-radial"
+    })
+    assert res.status_code == 200
+    data = res.json()
+
+    assert data["intent"] == "pfz_radius_filter"
+    assert len(data["candidate_pfzs"]) == 9
+
+    # Verify deterministic sorting by distance
+    dists = [c["distance_km"] for c in data["candidate_pfzs"]]
+    assert dists == sorted(dists)
+
+    # First two targets must be Kuzhuppilly and Cherai
+    assert data["candidate_pfzs"][0]["landing_centre"] == "Kuzhuppilly"
+    assert data["candidate_pfzs"][1]["landing_centre"] == "Cherai"
+
+    # Evidence verification
+    sources = [e["source"] for e in data["evidence"]]
+    assert "SPATIAL_CANDIDATE_FILTER" in sources
+
+    # Context persistence
+    ctx = data["context"]
+    assert ctx is not None
+    assert len(ctx["candidate_pfzs"]) == 9
+    assert ctx["candidate_pfzs"][0]["landing_centre"] == "Kuzhuppilly"
+
+    # Answer text verification
+    assert "9" in data["answer"]
+    assert "Kuzhuppilly" in data["answer"]
+    assert "Cherai" in data["answer"]
+    assert "Historical snapshot notice" in data["answer"]
+
+
+def test_candidate_multi_turn_flow():
+    """Verify 5-turn candidate conversation flow:
+    Turn 1: Radial filter ("Show PFZ targets within 30 km of Kochi")
+    Turn 2: Closest referent ("Which one is closest?")
+    Turn 3: Pair comparison ("Compare the first and second")
+    Turn 4: Ordinal referent ("How far is the second one?")
+    Turn 5: Direct-route geofence check ("Is there a restricted zone between me and that target?")
+    """
+    session_id = "test-m5-candidates"
+
+    # Turn 1: Radial filter
+    r1 = client.post("/api/chat", json={
+        "message": "Show PFZ targets within 30 km of Kochi",
+        "conversation_id": session_id
+    })
+    assert r1.status_code == 200
+    d1 = r1.json()
+    assert d1["intent"] == "pfz_radius_filter"
+    assert len(d1["candidate_pfzs"]) == 9
+
+    # Turn 2: Which one is closest?
+    r2 = client.post("/api/chat", json={
+        "message": "Which one is closest?",
+        "conversation_id": session_id
+    })
+    assert r2.status_code == 200
+    d2 = r2.json()
+    assert d2["intent"] == "pfz_distance"
+    assert "Kuzhuppilly" in d2["answer"]
+    assert d2["context"]["selected_pfz"]["landing_centre"] == "Kuzhuppilly"
+
+    # Turn 3: Compare the first and second
+    r3 = client.post("/api/chat", json={
+        "message": "Compare the first and second",
+        "conversation_id": session_id
+    })
+    assert r3.status_code == 200
+    d3 = r3.json()
+    assert d3["intent"] == "pfz_comparison"
+    assert d3["pfz_comparison"] is not None
+
+    comp = d3["pfz_comparison"]
+    assert comp["target_a"]["landing_centre"] == "Kuzhuppilly"
+    assert comp["target_b"]["landing_centre"] == "Cherai"
+    assert "Kuzhuppilly" in comp["closer_target"]
+    assert comp["distance_difference_km"] == pytest.approx(0.09, 0.02)
+    assert comp["geofence_status_a"] == "INTERSECTS_RESTRICTED_ZONE"
+    assert comp["geofence_status_b"] == "INTERSECTS_RESTRICTED_ZONE"
+    assert len(comp["unavailable_fields"]) >= 5
+    assert "historical" in comp["disclaimer"].lower()
+
+    sources_3 = [e["source"] for e in d3["evidence"]]
+    assert "CANDIDATE_COMPARISON_ENGINE" in sources_3
+
+    # Turn 4: How far is the second one?
+    r4 = client.post("/api/chat", json={
+        "message": "How far is the second one?",
+        "conversation_id": session_id
+    })
+    assert r4.status_code == 200
+    d4 = r4.json()
+    assert d4["intent"] == "pfz_distance"
+    assert "Cherai" in d4["answer"]
+    assert d4["context"]["selected_pfz"]["landing_centre"] == "Cherai"
+
+    # Turn 5: Is there a restricted zone between me and that target?
+    r5 = client.post("/api/chat", json={
+        "message": "Is there a restricted zone between me and that target?",
+        "conversation_id": session_id
+    })
+    assert r5.status_code == 200
+    d5 = r5.json()
+    assert d5["intent"] == "pfz_geofence_check"
+    assert d5["geospatial"]["direct_route_geofence_status"] == "INTERSECTS_RESTRICTED_ZONE"
+    assert len(d5["geospatial"]["direct_route_intersected_zones"]) > 0
+
+    sources_5 = [e["source"] for e in d5["evidence"]]
+    assert "DIRECT_ROUTE_GEOFENCE_ENGINE" in sources_5
+    assert "RESTRICTED ZONE INTERSECTION DETECTED" in d5["answer"]
+
+
+def test_candidate_referent_safe_failure_without_candidates():
+    """Verify safe failure when asking to compare candidates without prior candidates in context."""
+    session_id = "test-m5-safe-fail"
+    res = client.post("/api/chat", json={
+        "message": "Compare the first and second",
+        "conversation_id": session_id
+    })
+    assert res.status_code == 200
+    data = res.json()
+
+    assert data["intent"] == "clarification_needed"
+    assert "No candidate PFZ targets are currently active" in data["answer"]
+
+
+def test_candidate_referent_ordinal_out_of_range():
+    """Verify safe failure when requesting an ordinal beyond the number of candidates."""
+    session_id = "test-m5-ordinal-fail"
+
+    # Turn 1: 2 candidates within 25 km
+    r1 = client.post("/api/chat", json={
+        "message": "What PFZ targets are within 25 km of Kochi?",
+        "conversation_id": session_id
+    })
+    assert r1.status_code == 200
+    assert len(r1.json()["candidate_pfzs"]) == 2
+
+    # Turn 2: Ask for 4th target (out of range)
+    r2 = client.post("/api/chat", json={
+        "message": "How far is the fourth one?",
+        "conversation_id": session_id
+    })
+    assert r2.status_code == 200
+    d2 = r2.json()
+    assert d2["intent"] == "clarification_needed"
+    assert "No candidate PFZ targets are currently active" in d2["answer"]

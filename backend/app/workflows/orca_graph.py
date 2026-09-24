@@ -26,7 +26,9 @@ from app.models.schemas import (
     TransitRoute,
     TemporalComparisonResult,
     RouteRiskAssessment,
-    TimeWindowMetrics
+    TimeWindowMetrics,
+    NearestPFZ,
+    PFZComparisonResult
 )
 from app.agents.planner import PlannerAgent
 from app.agents.weather import WeatherAgent
@@ -61,6 +63,8 @@ class OrcaState(TypedDict, total=False):
     transit_route: Optional[Dict[str, Any]]
     temporal_comparison: Optional[Dict[str, Any]]
     route_risk: Optional[Dict[str, Any]]
+    candidate_pfzs: Optional[List[Dict[str, Any]]]
+    pfz_comparison: Optional[Dict[str, Any]]
     evidence_items: Optional[List[Dict[str, Any]]]
     conversation_context: Optional[Dict[str, Any]]
     
@@ -178,7 +182,7 @@ def ocean_node(state: OrcaState) -> OrcaState:
 
 
 def geospatial_node(state: OrcaState) -> OrcaState:
-    """Execute GeospatialAgent, record selected PFZ, and compute safe passage route."""
+    """Execute GeospatialAgent, record selected/candidate PFZs, and compute safe passage route."""
     trace = list(state.get("agent_trace", []))
     trace.append(geospatial_agent.AGENT_NAME)
 
@@ -188,20 +192,54 @@ def geospatial_node(state: OrcaState) -> OrcaState:
     else:
         loc_coords = LocationCoords(name="Kochi", latitude=9.9312, longitude=76.2673)
 
-    geo_data = geospatial_agent.execute(location=loc_coords)
-
-    # Capture nearest PFZ into conversation context
     ctx_dict = dict(state.get("conversation_context") or {})
-    if geo_data.nearest_pfz:
+    candidate_ctx = [NearestPFZ(**item) for item in ctx_dict.get("candidate_pfzs", [])]
+    selected_target = NearestPFZ(**ctx_dict["selected_pfz"]) if ctx_dict.get("selected_pfz") else None
+
+    # Resolve target ordinal if planner specified target_ordinal
+    target_ord = plan_dict.get("target_ordinal")
+    if target_ord is not None and candidate_ctx and len(candidate_ctx) > target_ord:
+        selected_target = candidate_ctx[target_ord]
+
+    intent = plan_dict.get("intent")
+    radius_km = plan_dict.get("radius_km")
+    compare_targets = plan_dict.get("compare_targets")
+
+    geo_data = geospatial_agent.execute(
+        location=loc_coords,
+        radius_km=radius_km,
+        intent=intent,
+        candidate_context=candidate_ctx,
+        selected_target=selected_target,
+        compare_targets=compare_targets
+    )
+
+    # Capture candidate PFZs into conversation context
+    if geo_data.candidate_pfzs:
+        ctx_dict["candidate_pfzs"] = [c.model_dump() for c in geo_data.candidate_pfzs]
+
+    # Capture selected PFZ into conversation context
+    if selected_target:
+        ctx_dict["selected_pfz"] = selected_target.model_dump()
+    elif geo_data.nearest_pfz:
         ctx_dict["selected_pfz"] = geo_data.nearest_pfz.model_dump()
 
-    # Plan safe passage corridor route if nearest PFZ is identified
+    # Capture candidate comparison into conversation context
+    if geo_data.pfz_comparison:
+        ctx_dict["pfz_comparison"] = geo_data.pfz_comparison.model_dump()
+        ctx_dict["compared_pfzs"] = [
+            geo_data.pfz_comparison.target_a.model_dump(),
+            geo_data.pfz_comparison.target_b.model_dump()
+        ]
+
+    # Plan safe passage corridor route if nearest PFZ or selected target is identified
     transit_route_dict = None
-    if geo_data.nearest_pfz:
+    target_for_routing = selected_target or geo_data.nearest_pfz
+    if target_for_routing and intent not in ["pfz_radius_filter", "pfz_comparison", "pfz_geofence_check"]:
         vessel_type = plan_dict.get("vessel_type") or ctx_dict.get("vessel_type")
         route = geospatial_agent.plan_route(
             origin=loc_coords,
-            destination=geo_data.nearest_pfz,
+            destination=target_for_routing,
             vessel_type=vessel_type
         )
         transit_route_dict = route.model_dump()
@@ -210,6 +248,8 @@ def geospatial_node(state: OrcaState) -> OrcaState:
     return {
         "geospatial_data": geo_data.model_dump(),
         "transit_route": transit_route_dict,
+        "candidate_pfzs": [c.model_dump() for c in geo_data.candidate_pfzs] if geo_data.candidate_pfzs else None,
+        "pfz_comparison": geo_data.pfz_comparison.model_dump() if geo_data.pfz_comparison else None,
         "conversation_context": ctx_dict,
         "agent_trace": trace
     }
@@ -319,6 +359,18 @@ def evidence_node(state: OrcaState) -> OrcaState:
     route_risk_data = state.get("route_risk")
     route_risk_obj = RouteRiskAssessment(**route_risk_data) if route_risk_data else None
 
+    candidate_pfzs_data = state.get("candidate_pfzs") or (
+        state.get("geospatial_data", {}).get("candidate_pfzs")
+        if state.get("geospatial_data") else None
+    )
+    candidate_pfzs_obj = [NearestPFZ(**c) for c in candidate_pfzs_data] if candidate_pfzs_data else []
+
+    pfz_comp_data = state.get("pfz_comparison") or (
+        state.get("geospatial_data", {}).get("pfz_comparison")
+        if state.get("geospatial_data") else None
+    )
+    pfz_comp_obj = PFZComparisonResult(**pfz_comp_data) if pfz_comp_data else None
+
     ctx_dict = state.get("conversation_context")
     context_obj = ConversationContext(**ctx_dict) if ctx_dict else None
 
@@ -331,7 +383,9 @@ def evidence_node(state: OrcaState) -> OrcaState:
         context=context_obj,
         transit_route=route_obj,
         temporal_comparison=temporal_comp_obj,
-        route_risk=route_risk_obj
+        route_risk=route_risk_obj,
+        candidate_pfzs=candidate_pfzs_obj,
+        pfz_comparison=pfz_comp_obj
     )
 
     # Persist updated conversation context to session store
@@ -340,6 +394,11 @@ def evidence_node(state: OrcaState) -> OrcaState:
             context_obj.temporal_comparison = temporal_comp_obj
         if route_risk_obj:
             context_obj.route_risk = route_risk_obj
+        if candidate_pfzs_obj:
+            context_obj.candidate_pfzs = candidate_pfzs_obj
+        if pfz_comp_obj:
+            context_obj.pfz_comparison = pfz_comp_obj
+            context_obj.compared_pfzs = [pfz_comp_obj.target_a, pfz_comp_obj.target_b]
         conversation_store.save_context(context_obj)
 
     return {
@@ -350,6 +409,8 @@ def evidence_node(state: OrcaState) -> OrcaState:
         "transit_route": route_obj.model_dump() if route_obj else None,
         "temporal_comparison": temporal_comp_obj.model_dump() if temporal_comp_obj else None,
         "route_risk": route_risk_obj.model_dump() if route_risk_obj else None,
+        "candidate_pfzs": [c.model_dump() for c in candidate_pfzs_obj] if candidate_pfzs_obj else None,
+        "pfz_comparison": pfz_comp_obj.model_dump() if pfz_comp_obj else None,
         "agent_trace": trace
     }
 

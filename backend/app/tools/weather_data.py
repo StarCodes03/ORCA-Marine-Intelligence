@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 import os
 import logging
 import httpx
+from app.tools.marine_cache import marine_cache
 
 logger = logging.getLogger("orca.tools.weather")
 
@@ -102,12 +103,22 @@ class MockWeatherDataAdapter:
 
         profile = cls.DEFAULT_FORECAST[time_key]
 
+        units = {
+            "wind_speed": {"value": profile["wind_speed_kmh"], "unit": "km/h"},
+            "wind_direction": {"value": profile["wind_direction_deg"], "unit": "deg"},
+            "rain_probability": {"value": profile["rain_probability"], "unit": "%"},
+            "temperature": {"value": profile["temperature_c"], "unit": "°C"},
+            "visibility": {"value": profile.get("visibility_km", 8.0), "unit": "km"},
+        }
+
         return {
             "source": cls.SOURCE_NAME,
             "location": location_name,
             "latitude": latitude,
             "longitude": longitude,
             "forecast_time": time_range,
+            "forecast_timestamp": None,
+            "retrieved_at": None,
             "wind_speed_kmh": profile["wind_speed_kmh"],
             "wind_direction_deg": profile["wind_direction_deg"],
             "rain_probability": profile["rain_probability"],
@@ -117,6 +128,7 @@ class MockWeatherDataAdapter:
             "temperature_c": profile["temperature_c"],
             "visibility_km": profile.get("visibility_km", 8.0),
             "is_mock": True,
+            "units": units,
             "notice": "DEMONSTRATION DATA ONLY. Not for actual maritime navigation."
         }
 
@@ -165,6 +177,11 @@ class OpenMeteoWeatherAdapter:
         time_range: str = "tomorrow_morning"
     ) -> Dict[str, Any]:
         """Fetch live weather forecast from Open-Meteo and parse structured output."""
+        # Check in-memory cache before performing HTTP call
+        cached = marine_cache.get("weather", latitude, longitude, time_range)
+        if cached:
+            return cached
+
         params = {
             "latitude": latitude,
             "longitude": longitude,
@@ -183,6 +200,9 @@ class OpenMeteoWeatherAdapter:
             response = client.get(cls.BASE_URL, params=params)
             response.raise_for_status()
             data = response.json()
+
+        # Capture actual machine time when live HTTP response successfully returned
+        retrieved_at = datetime.now(timezone.utc).isoformat()
 
         if "hourly" not in data or "time" not in data["hourly"]:
             raise ValueError("Open-Meteo response missing 'hourly.time' data array.")
@@ -217,13 +237,22 @@ class OpenMeteoWeatherAdapter:
         # Open-Meteo does not provide marine lightning risk. Do NOT fabricate or infer.
         lightning_risk = "unsupported"
 
-        return {
+        units = {
+            "wind_speed": {"value": wind_speed, "unit": "km/h"},
+            "wind_direction": {"value": wind_dir, "unit": "deg"},
+            "rain_probability": {"value": rain_prob, "unit": "%"},
+            "temperature": {"value": temp_c, "unit": "°C"},
+            "visibility": {"value": visibility_km if visibility_km is not None else 8.0, "unit": "km"},
+        }
+
+        result = {
             "source": cls.SOURCE_NAME,
             "location": location_name,
             "latitude": latitude,
             "longitude": longitude,
             "forecast_time": time_range,
             "forecast_timestamp": forecast_timestamp,
+            "retrieved_at": retrieved_at,
             "wind_speed_kmh": wind_speed,
             "wind_direction_deg": wind_dir,
             "rain_probability": rain_prob,
@@ -233,15 +262,22 @@ class OpenMeteoWeatherAdapter:
             "temperature_c": temp_c,
             "visibility_km": visibility_km if visibility_km is not None else 8.0,
             "is_mock": False,
+            "units": units,
             "raw_metadata": {
                 "provider": "Open-Meteo",
                 "api_endpoint": cls.BASE_URL,
                 "queried_coordinates": [latitude, longitude],
                 "resolved_forecast_timestamp": forecast_timestamp,
+                "retrieved_at": retrieved_at,
                 "wmo_code": w_code,
                 "lightning_risk_notice": "Lightning risk was not provided by the selected live source (Open-Meteo) and is marked as unsupported."
             }
         }
+
+        # Cache successful live payload
+        marine_cache.set("weather", latitude, longitude, time_range, result)
+
+        return result
 
 
 class WeatherDataAdapter:

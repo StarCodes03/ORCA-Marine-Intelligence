@@ -10,10 +10,17 @@ export interface LocationCoords {
 
 export type DataSourceStatus = 'LIVE' | 'DEMO / MOCK' | 'MOCK FALLBACK' | 'UNAVAILABLE' | 'OFFICIAL SNAPSHOT';
 
+export interface UnitMetadata {
+  value: number | string | null;
+  unit: string;
+}
+
 export interface WeatherData {
   source: string;
   location: string;
   forecast_time: string;
+  forecast_timestamp?: string | null;
+  retrieved_at?: string | null;
   wind_speed_kmh: number;
   wind_direction_deg?: number;
   rain_probability: number;
@@ -24,12 +31,16 @@ export interface WeatherData {
   visibility_km?: number | null;
   is_mock: boolean;
   is_fallback?: boolean;
+  units?: Record<string, UnitMetadata> | null;
   raw_metadata?: Record<string, any> | null;
 }
 
 export interface OceanData {
   source: string;
   location: string;
+  forecast_time?: string;
+  forecast_timestamp?: string | null;
+  retrieved_at?: string | null;
   sst_c: number;
   wave_height_m: number;
   sea_state: string;
@@ -44,6 +55,7 @@ export interface OceanData {
   tide_note?: string | null;
   is_mock: boolean;
   is_fallback?: boolean;
+  units?: Record<string, UnitMetadata> | null;
   raw_metadata?: Record<string, any> | null;
 }
 
@@ -122,6 +134,7 @@ export interface NearestPFZ {
   longitude: number;
   distance_km: number;
   bearing_deg?: number;
+  direction?: string;
   depth_m?: number;
   sst_c?: number;
   chlorophyll_mg_m3?: number;
@@ -187,7 +200,48 @@ export interface EvidenceItem {
   category: string;
   claim: string;
   source: string;
+  timestamp?: string;
   raw_data?: Record<string, any>;
+}
+
+export interface RouteRiskAssessment {
+  prototype_route_risk_index: number;
+  risk_level: string;
+  evaluation_point: LocationCoords;
+  vessel_type?: string | null;
+  wave_stress_ratio: number;
+  wind_stress_ratio: number;
+  factor_breakdown: Record<string, number>;
+  limiting_factor: string;
+  reasons: string[];
+  disclaimer: string;
+}
+
+export interface TimeWindowMetrics {
+  time_window: string;
+  wind_speed_kmh: number;
+  wind_direction_deg: number;
+  wave_height_m: number;
+  sea_state: string;
+  rain_probability: number;
+  risk_score: number;
+  risk_level: string;
+  source_weather: string;
+  source_ocean: string;
+}
+
+export interface TemporalComparisonResult {
+  evaluation_point: LocationCoords;
+  window_1: TimeWindowMetrics;
+  window_2: TimeWindowMetrics;
+  delta_wind_kmh: number;
+  delta_wave_m: number;
+  delta_rain_pct: number;
+  delta_risk_score: number;
+  trend: string;
+  recommendation: string;
+  tolerances_applied?: Record<string, number>;
+  provenance_notice: string;
 }
 
 export interface VesselProfile {
@@ -239,7 +293,11 @@ export interface ConversationContext {
   language_mode?: string;
   last_intent?: string | null;
   selected_pfz?: NearestPFZ | null;
+  candidate_pfzs?: NearestPFZ[] | null;
+  compared_pfzs?: NearestPFZ[] | null;
   active_route?: TransitRoute | null;
+  temporal_comparison?: TemporalComparisonResult | null;
+  route_risk?: RouteRiskAssessment | null;
   turn_count: number;
   updated_at?: string | null;
 }
