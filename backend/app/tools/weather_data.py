@@ -133,11 +133,33 @@ class MockWeatherDataAdapter:
         }
 
 
+from app.tools.base_adapter import SourceProvenanceMetadata
+
+
 class OpenMeteoWeatherAdapter:
     """Live weather adapter querying official Open-Meteo Forecast API."""
 
     SOURCE_NAME = "OPEN_METEO_WEATHER"
     BASE_URL = "https://api.open-meteo.com/v1/forecast"
+
+    @classmethod
+    def get_provenance(cls, is_live: bool = True, is_fallback: bool = False) -> SourceProvenanceMetadata:
+        """Return standardized provenance metadata."""
+        return SourceProvenanceMetadata(
+            source_id="open_meteo_weather",
+            source_name=cls.SOURCE_NAME if not is_fallback else "MOCK_WEATHER_DATA",
+            source_type="LIVE_API" if (is_live and not is_fallback) else "MOCK_FALLBACK",
+            coverage="Global Land & Marine Gridded Forecast (11km DWD/ECMWF)",
+            update_frequency="Hourly",
+            fetched_at=datetime.now(timezone.utc) if (is_live and not is_fallback) else None,
+            is_live=is_live and not is_fallback,
+            is_mock=is_fallback,
+            is_fallback=is_fallback,
+            limitations=[
+                "Lightning risk metric unsupported by provider; intentionally excluded from numeric scoring.",
+                "Hourly discrete forecast steps, not continuous real-time anemometer telemetry."
+            ]
+        )
 
     @classmethod
     def _find_forecast_index(cls, times: List[str], time_range: str) -> int:

@@ -16,11 +16,13 @@ interface ChatDashboardProps {
   isLoading: boolean;
   onSelectPfz?: (pfz: NearestPFZ) => void;
   latestResponse?: ChatResponse | null;
+  hasQueried?: boolean;
   selectedVessel?: string;
   onVesselChange?: (vessel: string) => void;
   selectedLanguage?: string;
   onLanguageChange?: (lang: string) => void;
   onNavigateToMarine?: () => void;
+  onNavigateToRoute?: () => void;
 }
 
 export const ChatDashboard: React.FC<ChatDashboardProps> = ({
@@ -29,11 +31,13 @@ export const ChatDashboard: React.FC<ChatDashboardProps> = ({
   isLoading,
   onSelectPfz,
   latestResponse,
+  hasQueried,
   selectedVessel,
   onVesselChange,
   selectedLanguage,
   onLanguageChange,
   onNavigateToMarine,
+  onNavigateToRoute,
 }) => {
   const handleSelectPfz = (pfz: NearestPFZ) => {
     if (onSelectPfz) onSelectPfz(pfz);
@@ -49,10 +53,13 @@ export const ChatDashboard: React.FC<ChatDashboardProps> = ({
           isLoading={isLoading}
           onSelectPfz={handleSelectPfz}
           latestResponse={latestResponse}
+          hasQueried={hasQueried}
           selectedVessel={selectedVessel}
           onVesselChange={onVesselChange}
           selectedLanguage={selectedLanguage}
           onLanguageChange={onLanguageChange}
+          onNavigateToMarine={onNavigateToMarine}
+          onNavigateToRoute={onNavigateToRoute}
         />
       </div>
     </div>

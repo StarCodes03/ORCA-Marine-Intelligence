@@ -8,7 +8,7 @@ Structured input/output with clear source provenance (INCOIS OFFICIAL_SNAPSHOT o
 """
 
 import logging
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union
 from app.models.schemas import (
     GeospatialData,
     LocationCoords,
@@ -135,7 +135,7 @@ class GeospatialAgent:
     def plan_route(
         self,
         origin: LocationCoords,
-        destination: NearestPFZ,
+        destination: Union[NearestPFZ, LocationCoords],
         vessel_type: Optional[str] = None,
         clearance_buffer_km: Optional[float] = None
     ) -> Any:

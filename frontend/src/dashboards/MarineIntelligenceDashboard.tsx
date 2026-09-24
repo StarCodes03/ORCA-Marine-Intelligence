@@ -32,6 +32,7 @@ export const MarineIntelligenceDashboard: React.FC<MarineIntelligenceDashboardPr
   const [showRestricted, setShowRestricted] = useState<boolean>(true);
   const [showVessel, setShowVessel] = useState<boolean>(true);
   const [showRoute, setShowRoute] = useState<boolean>(true);
+  const [showAlternatives, setShowAlternatives] = useState<boolean>(true);
   const [selectedRadius, setSelectedRadius] = useState<number | null>(null);
   const [isLayerPanelOpen, setIsLayerPanelOpen] = useState<boolean>(true);
 
@@ -110,6 +111,15 @@ export const MarineIntelligenceDashboard: React.FC<MarineIntelligenceDashboardPr
                   <span className="layer-swatch" style={{ background: '#f59e0b' }} />
                   <span>Safe Passage Corridor</span>
                 </label>
+                <label className="layer-checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={showAlternatives}
+                    onChange={(e) => setShowAlternatives(e.target.checked)}
+                  />
+                  <span className="layer-swatch" style={{ background: '#c084fc' }} />
+                  <span>Route Alternatives</span>
+                </label>
               </div>
 
               {/* Radius Filter */}
@@ -151,6 +161,7 @@ export const MarineIntelligenceDashboard: React.FC<MarineIntelligenceDashboardPr
           showPfz={showPfz}
           showRestricted={showRestricted}
           showRoute={showRoute}
+          showAlternatives={showAlternatives}
           radiusFilterKm={selectedRadius}
           onSelectPfz={onSelectPfz}
           hideFloatingLegend={true}

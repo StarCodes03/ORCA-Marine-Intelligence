@@ -33,7 +33,7 @@ def test_marine_safety_workflow():
 
     # Verification of final answer contents
     final_answer = result["final_answer"]
-    assert any(lvl in final_answer for lvl in ["LOW RISK", "MODERATE RISK", "HIGH RISK", "CRITICAL RISK"])
+    assert any(f"ENVIRONMENTAL CONDITION RISK: {lvl}" in final_answer for lvl in ["LOW", "MODERATE", "HIGH", "CRITICAL"])
     assert ("OPEN_METEO_WEATHER" in final_answer or "MOCK_WEATHER_DATA" in final_answer)
     assert ("OPEN_METEO_MARINE" in final_answer or "MOCK_OCEAN_DATA" in final_answer)
     assert ("INCOIS" in final_answer or "DEMO_GIS_DATA" in final_answer)
@@ -54,7 +54,7 @@ def test_marine_safety_workflow_mock_fallback(monkeypatch):
 
     assert result["risk_assessment"]["risk_level"] == "HIGH"
     final_answer = result["final_answer"]
-    assert "HIGH RISK" in final_answer
+    assert "ENVIRONMENTAL CONDITION RISK: HIGH" in final_answer
     assert "MOCK_WEATHER_DATA" in final_answer
     assert "MOCK_OCEAN_DATA" in final_answer
     assert ("INCOIS" in final_answer or "DEMO_GIS_DATA" in final_answer)

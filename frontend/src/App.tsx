@@ -6,7 +6,14 @@ import { MarineIntelligenceDashboard } from './dashboards/MarineIntelligenceDash
 import { RouteSafetyDashboard } from './dashboards/RouteSafetyDashboard';
 import { DataEvidenceDashboard } from './dashboards/DataEvidenceDashboard';
 import { checkHealth, getSpatialLayers, sendChatMessage } from './services/api';
-import type { ChatResponse, LocationCoords, NearestPFZ } from './services/api';
+import type {
+  ChatResponse,
+  LocationCoords,
+  NearestPFZ,
+  WeatherData,
+  OceanData,
+  GeospatialData
+} from './services/api';
 
 interface Message {
   id: string;
@@ -26,6 +33,10 @@ export const App: React.FC = () => {
   });
   const [nearestPfz, setNearestPfz] = useState<NearestPFZ | null>(null);
   const [latestResponse, setLatestResponse] = useState<ChatResponse | null>(null);
+  const [latestWeather, setLatestWeather] = useState<WeatherData | null>(null);
+  const [latestOcean, setLatestOcean] = useState<OceanData | null>(null);
+  const [latestGeospatial, setLatestGeospatial] = useState<GeospatialData | null>(null);
+  const [hasQueried, setHasQueried] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [selectedVessel, setSelectedVessel] = useState<string>('motorized_frp_obm');
   const [selectedLanguage, setSelectedLanguage] = useState<string>('english');
@@ -122,6 +133,11 @@ export const App: React.FC = () => {
       );
 
       setLatestResponse(response);
+      setHasQueried(true);
+
+      if (response.weather) setLatestWeather(response.weather);
+      if (response.ocean) setLatestOcean(response.ocean);
+      if (response.geospatial) setLatestGeospatial(response.geospatial);
 
       // If response has spatial features or geospatial data, identify target PFZ
       const targetPfz = response.spatial_features?.nearest_pfz || response.geospatial?.nearest_pfz || null;
@@ -152,13 +168,21 @@ export const App: React.FC = () => {
     }
   };
 
+  const effectiveLatestResponse: ChatResponse | null = latestResponse ? {
+    ...latestResponse,
+    weather: latestResponse.weather || latestWeather,
+    ocean: latestResponse.ocean || latestOcean,
+    geospatial: latestResponse.geospatial || latestGeospatial,
+  } : null;
+
   return (
     <div className="app-container">
       {/* Top Application Header */}
       <Header
         systemHealthy={systemHealthy}
         sectorName="Kochi Coastal Sector, Kerala"
-        latestResponse={latestResponse}
+        latestResponse={effectiveLatestResponse}
+        hasQueried={hasQueried}
       />
 
       {/* Persistent Shell Layout: Sidebar + Active Workspace */}
@@ -177,12 +201,14 @@ export const App: React.FC = () => {
               onSendMessage={handleSendMessage}
               isLoading={isLoading}
               onSelectPfz={(pfz) => setNearestPfz(pfz)}
-              latestResponse={latestResponse}
+              latestResponse={effectiveLatestResponse}
+              hasQueried={hasQueried}
               selectedVessel={selectedVessel}
               onVesselChange={setSelectedVessel}
               selectedLanguage={selectedLanguage}
               onLanguageChange={setSelectedLanguage}
               onNavigateToMarine={() => navigateTo('/marine')}
+              onNavigateToRoute={() => navigateTo('/route')}
             />
           )}
 
@@ -191,7 +217,7 @@ export const App: React.FC = () => {
               vesselLocation={vesselLocation}
               nearestPfz={nearestPfz}
               spatialLayers={spatialLayers}
-              transitRoute={latestResponse?.transit_route}
+              transitRoute={effectiveLatestResponse?.transit_route}
               onSelectPfz={(pfz) => setNearestPfz(pfz)}
               onNavigateToRoute={() => navigateTo('/route')}
             />
@@ -202,7 +228,7 @@ export const App: React.FC = () => {
               vesselLocation={vesselLocation}
               nearestPfz={nearestPfz}
               spatialLayers={spatialLayers}
-              latestResponse={latestResponse}
+              latestResponse={effectiveLatestResponse}
               selectedVessel={selectedVessel}
               onVesselChange={setSelectedVessel}
               onNavigateToChat={() => navigateTo('/chat')}
@@ -211,7 +237,10 @@ export const App: React.FC = () => {
           )}
 
           {activeRoute === '/evidence' && (
-            <DataEvidenceDashboard latestResponse={latestResponse} />
+            <DataEvidenceDashboard
+              latestResponse={effectiveLatestResponse}
+              hasQueried={hasQueried}
+            />
           )}
         </main>
       </div>

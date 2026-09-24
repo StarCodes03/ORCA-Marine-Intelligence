@@ -232,9 +232,16 @@ def geospatial_node(state: OrcaState) -> OrcaState:
             geo_data.pfz_comparison.target_b.model_dump()
         ]
 
-    # Plan safe passage corridor route if nearest PFZ or selected target is identified
+    # Plan safe passage corridor route if destination, nearest PFZ, or selected target is identified
     transit_route_dict = None
-    target_for_routing = selected_target or geo_data.nearest_pfz
+    target_for_routing = None
+    if plan_dict.get("destination"):
+        target_for_routing = LocationCoords(**plan_dict["destination"])
+    elif selected_target:
+        target_for_routing = selected_target
+    elif geo_data.nearest_pfz:
+        target_for_routing = geo_data.nearest_pfz
+
     if target_for_routing and intent not in ["pfz_radius_filter", "pfz_comparison", "pfz_geofence_check"]:
         vessel_type = plan_dict.get("vessel_type") or ctx_dict.get("vessel_type")
         route = geospatial_agent.plan_route(
@@ -244,6 +251,8 @@ def geospatial_node(state: OrcaState) -> OrcaState:
         )
         transit_route_dict = route.model_dump()
         ctx_dict["active_route"] = transit_route_dict
+    elif not transit_route_dict and ctx_dict.get("active_route"):
+        transit_route_dict = ctx_dict.get("active_route")
 
     return {
         "geospatial_data": geo_data.model_dump(),
@@ -323,7 +332,7 @@ def risk_node(state: OrcaState) -> OrcaState:
             )
             result["temporal_comparison"] = comp_result.model_dump()
 
-    # 2. Deterministic Prototype Route Risk Index
+    # 2. Deterministic Prototype Route Risk Index & Route Alternatives Risk Evaluation
     transit_route_data = state.get("transit_route") or (ctx_dict.get("active_route") if ctx_dict else None)
     if transit_route_data:
         route_obj = TransitRoute(**transit_route_data)
@@ -335,6 +344,51 @@ def risk_node(state: OrcaState) -> OrcaState:
             risk_assessment=assessment,
             vessel_type=vessel_type
         )
+
+        # Evaluate risk for all route alternatives if present
+        if route_obj.alternatives:
+            updated_alts = []
+            for alt in route_obj.alternatives:
+                risk_idx, risk_lvl = route_risk_calculator.assess_alternative_risk(
+                    origin=loc_coords,
+                    alternative=alt,
+                    weather=weather_obj,
+                    ocean=ocean_obj,
+                    risk_assessment=assessment,
+                    vessel_type=vessel_type
+                )
+                alt.route_risk_index = risk_idx
+                alt.route_risk_level = risk_lvl
+                updated_alts.append(alt)
+            route_obj.alternatives = updated_alts
+            result["transit_route"] = route_obj.model_dump()
+
+        # If comparing windows, calculate temporal route risk delta
+        if compare_windows and len(compare_windows) >= 2 and state.get("weather_data_w2") and state.get("ocean_data_w2"):
+            weather_w2 = WeatherData(**state["weather_data_w2"])
+            ocean_w2 = OceanData(**state["ocean_data_w2"])
+            assessment_w2 = risk_agent.assess(
+                weather=weather_w2,
+                ocean=ocean_w2,
+                geospatial=None,
+                vessel_type=vessel_type
+            )
+            route_risk_w2 = route_risk_calculator.assess_route_risk(
+                origin=loc_coords,
+                transit_route=route_obj,
+                weather=weather_w2,
+                ocean=ocean_w2,
+                risk_assessment=assessment_w2,
+                vessel_type=vessel_type
+            )
+            temporal_route_risk = route_risk_calculator.compare_temporal_route_risk(
+                risk_w1=route_risk,
+                risk_w2=route_risk_w2,
+                window_1_name=compare_windows[0],
+                window_2_name=compare_windows[1]
+            )
+            route_risk.temporal_comparison = temporal_route_risk
+
         result["route_risk"] = route_risk.model_dump()
 
     return result
@@ -454,7 +508,7 @@ def route_from_ocean(state: OrcaState) -> str:
 
     if "geospatial" in req:
         return "geospatial_node"
-    if intent == "temporal_comparison" or plan.get("compare_windows"):
+    if intent in ["temporal_comparison", "route_risk_temporal"] or plan.get("compare_windows"):
         return "risk_node"
     return "evidence_node"
 
@@ -464,8 +518,8 @@ def route_from_geospatial(state: OrcaState) -> str:
     plan = state.get("planner_plan", {})
     intent = plan.get("intent", "marine_safety")
 
-    # If marine safety, safe passage route, or weather+ocean present, run risk assessment
-    if intent in ["marine_safety", "safe_passage_route"] or (state.get("weather_data") and state.get("ocean_data")):
+    # If marine safety, safe passage route, route risk, or weather+ocean present, run risk assessment
+    if intent in ["marine_safety", "safe_passage_route", "route_risk_temporal", "route_alternatives"] or (state.get("weather_data") and state.get("ocean_data")):
         return "risk_node"
     return "evidence_node"
 

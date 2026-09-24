@@ -39,6 +39,8 @@ class WeatherAgent:
             source=raw_data["source"],
             location=raw_data["location"],
             forecast_time=raw_data["forecast_time"],
+            forecast_timestamp=raw_data.get("forecast_timestamp"),
+            retrieved_at=raw_data.get("retrieved_at"),
             wind_speed_kmh=raw_data["wind_speed_kmh"],
             wind_direction_deg=raw_data.get("wind_direction_deg", 270.0),
             rain_probability=raw_data["rain_probability"],
@@ -48,6 +50,8 @@ class WeatherAgent:
             temperature_c=raw_data.get("temperature_c", 28.5),
             visibility_km=raw_data.get("visibility_km"),
             is_mock=raw_data.get("is_mock", True),
+            is_fallback=raw_data.get("is_fallback", False),
+            units=raw_data.get("units"),
             raw_metadata=raw_data.get("raw_metadata")
         )
 

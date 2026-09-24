@@ -91,8 +91,22 @@ Thumbs.db
 # Logs and runtime traces
 *.log
 logs/
+
+# Runtime SQLite databases, journals, and WAL files
 *.sqlite
 *.sqlite3
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+
+# Explicitly preserve version-controlled data assets and test fixtures
+!data/**
+!backend/app/data/**
+!backend/tests/fixtures/**
 
 # Environment and Secrets
 .env

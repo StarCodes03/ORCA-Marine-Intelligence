@@ -1,27 +1,25 @@
 import React from 'react';
 import { Compass, Shield, AlertTriangle, Radio } from 'lucide-react';
 import {
-  deriveWeatherStatus,
-  deriveOceanStatus,
+  deriveGlobalSourceStatus,
   type ChatResponse,
+  type GlobalSourceStatus,
 } from '../services/api';
 
 interface HeaderProps {
   systemHealthy: boolean;
   sectorName?: string;
   latestResponse?: ChatResponse | null;
+  hasQueried?: boolean;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   systemHealthy,
   sectorName = 'Kochi Coastal Sector, Kerala',
   latestResponse,
+  hasQueried = false,
 }) => {
-  const weatherStatus = deriveWeatherStatus(latestResponse?.weather);
-  const oceanStatus = deriveOceanStatus(latestResponse?.ocean);
-
-  const isLive = weatherStatus === 'LIVE' || oceanStatus === 'LIVE';
-  const isFallback = weatherStatus === 'MOCK FALLBACK' || oceanStatus === 'MOCK FALLBACK';
+  const globalStatus: GlobalSourceStatus = deriveGlobalSourceStatus(latestResponse, hasQueried);
 
   return (
     <header className="app-header">
@@ -42,12 +40,22 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
 
         {/* Dynamic Data Provenance Status Indicator */}
-        {isLive ? (
-          <div className="pill-badge live-source-badge" title="Live Open-Meteo telemetry active for Weather and Marine layers">
+        {globalStatus === 'READY' ? (
+          <div className="pill-badge ready-source-badge" title="ORCA agent collective ready. Awaiting user query.">
+            <Radio size={13} className="ready-icon" />
+            <span>SOURCE: READY</span>
+          </div>
+        ) : globalStatus === 'LIVE (HYBRID)' ? (
+          <div className="pill-badge live-source-badge" title="Live Open-Meteo telemetry active for Weather and Marine layers + Official INCOIS snapshot">
             <Radio size={13} className="live-icon-pulse" />
             <span>SOURCE: LIVE (HYBRID)</span>
           </div>
-        ) : isFallback ? (
+        ) : globalStatus === 'OFFICIAL SNAPSHOT' ? (
+          <div className="pill-badge snapshot-badge" title="Historical INCOIS landing-centre PFZ advisory snapshot active">
+            <Radio size={13} />
+            <span>SOURCE: OFFICIAL SNAPSHOT</span>
+          </div>
+        ) : globalStatus === 'MOCK FALLBACK' ? (
           <div className="pill-badge fallback-badge" title="Live API call failed; automatic fallback to demonstration mock data active">
             <AlertTriangle size={13} />
             <span>SOURCE: MOCK FALLBACK</span>

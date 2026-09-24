@@ -23,6 +23,7 @@ interface MarineMapProps {
   showPfz?: boolean;
   showRestricted?: boolean;
   showRoute?: boolean;
+  showAlternatives?: boolean;
   radiusFilterKm?: number | null;
   onSelectPfz?: (pfz: NearestPFZ) => void;
   hideFloatingLegend?: boolean;
@@ -185,6 +186,7 @@ export const MarineMap: React.FC<MarineMapProps> = ({
   showPfz = true,
   showRestricted = true,
   showRoute = true,
+  showAlternatives = true,
   radiusFilterKm = null,
   onSelectPfz,
   hideFloatingLegend = false,
@@ -447,6 +449,43 @@ export const MarineMap: React.FC<MarineMapProps> = ({
             }}
           />
         )}
+
+        {/* Route Alternatives (Direct & High-Clearance Seaward) */}
+        {showRoute && showAlternatives && transitRoute?.alternatives?.map((alt) => {
+          if (alt.alternative_id === 'safe_corridor') return null;
+          const coords = alt.geojson_feature?.geometry?.coordinates;
+          if (!coords || coords.length === 0) return null;
+          const isDirect = alt.alternative_id === 'direct';
+          return (
+            <Polyline
+              key={alt.alternative_id}
+              positions={coords.map((c: number[]) => [c[1], c[0]])}
+              pathOptions={{
+                color: isDirect ? '#f87171' : '#c084fc',
+                weight: 2.5,
+                dashArray: isDirect ? '4, 4' : '6, 6',
+                opacity: 0.8
+              }}
+            >
+              <Popup>
+                <div style={{ padding: '4px', fontSize: '11px', color: '#cbd5e1' }}>
+                  <strong style={{ color: isDirect ? '#f87171' : '#c084fc' }}>
+                    {isDirect ? 'Direct Line-of-Sight' : 'High-Clearance Seaward Corridor'}
+                  </strong>
+                  <div>Distance: {alt.total_distance_km} km ({alt.total_distance_nm} nm)</div>
+                  <div>Est. Duration: ~{alt.estimated_duration_hours} hrs</div>
+                  {alt.estimated_fuel_litres != null && <div>Est. Fuel: ~{alt.estimated_fuel_litres} L</div>}
+                  <div style={{ color: alt.intersects_restricted_zone ? '#ef4444' : '#10b981', marginTop: '2px' }}>
+                    {alt.intersects_restricted_zone ? '⚠️ Traverses Restricted Zone' : '✅ Clear of Restricted Perimeters'}
+                  </div>
+                  {alt.route_risk_index != null && (
+                    <div>Risk Index: {alt.route_risk_index}/10 ({alt.route_risk_level})</div>
+                  )}
+                </div>
+              </Popup>
+            </Polyline>
+          );
+        })}
 
         {/* Clearance Waypoints (M4) */}
         {showRoute && highlightRoute && transitRoute?.waypoints?.map((wp, idx) => (

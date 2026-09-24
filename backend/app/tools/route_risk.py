@@ -11,13 +11,14 @@ The Prototype Route Risk Index is a configurable prototype decision-support metr
 it is NOT an official maritime safety rating, seaworthiness certification, or regulatory limit.
 """
 
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 import logging
 
 from app.models.schemas import (
     LocationCoords,
     RouteRiskAssessment,
     TransitRoute,
+    RouteAlternative,
     WeatherData,
     OceanData,
     RiskAssessment
@@ -244,6 +245,103 @@ class RouteRiskCalculator:
             reasons=reasons,
             disclaimer=disclaimer
         )
+
+    def assess_alternative_risk(
+        self,
+        origin: LocationCoords,
+        alternative: RouteAlternative,
+        weather: Optional[WeatherData],
+        ocean: Optional[OceanData],
+        risk_assessment: Optional[RiskAssessment],
+        vessel_type: Optional[str] = None
+    ) -> Tuple[float, str]:
+        """Compute Prototype Route Risk Index (0-10) and classification for a specific RouteAlternative."""
+        w_env = float(self.config.get("weight_env", 0.35))
+        w_vessel = float(self.config.get("weight_vessel", 0.25))
+        w_dist = float(self.config.get("weight_dist", 0.20))
+        w_geom = float(self.config.get("weight_geom", 0.20))
+
+        s_env = min(float(risk_assessment.risk_score), 10.0) if risk_assessment else 2.0
+        wave_val = float(ocean.wave_height_m) if ocean and ocean.wave_height_m is not None else 1.0
+        wind_val = float(weather.wind_speed_kmh) if weather and weather.wind_speed_kmh is not None else 15.0
+        v_stress = self.calculate_vessel_stress_penalty(wave_val, wind_val, vessel_type)
+        s_vessel = v_stress["penalty_score"]
+
+        dist_exposure = self.calculate_distance_exposure_penalty(alternative.total_distance_nm)
+        s_dist = dist_exposure["penalty_score"]
+
+        if alternative.intersects_restricted_zone:
+            s_geom = 10.0  # Critical penalty for direct traversal of restricted zone
+        elif alternative.alternative_id == "safe_corridor":
+            s_geom = 3.5  # Collision-free avoidance waypoint detour
+        else:
+            s_geom = 1.0  # High clearance seaward alternative
+
+        raw_index = (w_env * s_env) + (w_vessel * s_vessel) + (w_dist * s_dist) + (w_geom * s_geom)
+        total_index = round(min(max(raw_index, 0.0), 10.0), 1)
+
+        if total_index <= 3.0:
+            level = "LOW"
+        elif total_index <= 6.0:
+            level = "MODERATE"
+        elif total_index <= 8.5:
+            level = "HIGH"
+        else:
+            level = "CRITICAL"
+
+        return total_index, level
+
+    def compare_temporal_route_risk(
+        self,
+        risk_w1: RouteRiskAssessment,
+        risk_w2: RouteRiskAssessment,
+        window_1_name: str,
+        window_2_name: str
+    ) -> Dict[str, Any]:
+        """Deterministically compare route risk index between two forecast horizons."""
+        delta_score = round(risk_w2.prototype_route_risk_index - risk_w1.prototype_route_risk_index, 1)
+
+        if delta_score >= 1.0:
+            trend = "INCREASING_RISK"
+            summary = (
+                f"Route risk is increasing from {risk_w1.prototype_route_risk_index} ({risk_w1.risk_level}) in {window_1_name} "
+                f"to {risk_w2.prototype_route_risk_index} ({risk_w2.risk_level}) in {window_2_name}. "
+                f"Primary factor: worsening environmental conditions or vessel stress at evaluation point."
+            )
+        elif delta_score <= -1.0:
+            trend = "DECREASING_RISK"
+            summary = (
+                f"Route risk is decreasing from {risk_w1.prototype_route_risk_index} ({risk_w1.risk_level}) in {window_1_name} "
+                f"to {risk_w2.prototype_route_risk_index} ({risk_w2.risk_level}) in {window_2_name}. "
+                f"Conditions are calming along passage corridor."
+            )
+        else:
+            trend = "STABLE"
+            summary = (
+                f"Route risk remains stable between {window_1_name} ({risk_w1.prototype_route_risk_index}) and "
+                f"{window_2_name} ({risk_w2.prototype_route_risk_index})."
+            )
+
+        return {
+            "window_1": window_1_name,
+            "window_2": window_2_name,
+            "departure_window": window_1_name,
+            "arrival_window": window_2_name,
+            "score_w1": risk_w1.prototype_route_risk_index,
+            "score_w2": risk_w2.prototype_route_risk_index,
+            "departure_risk_index": risk_w1.prototype_route_risk_index,
+            "departure_risk_level": risk_w1.risk_level,
+            "arrival_risk_index": risk_w2.prototype_route_risk_index,
+            "arrival_risk_level": risk_w2.risk_level,
+            "delta_score": delta_score,
+            "delta_risk_index": delta_score,
+            "delta_wind_kmh": 0.0,
+            "delta_wave_m": 0.0,
+            "trend": trend,
+            "summary": summary,
+            "recommendation": summary,
+            "provenance_notice": "Derived calculation comparing route risk across forecast horizons."
+        }
 
 
 # Singleton instance

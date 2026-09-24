@@ -2,7 +2,7 @@
 
 Performs deterministic coordinate distance calculations (Haversine),
 bearing calculation, and point-in-polygon geofencing for restricted zones.
-Loads demo GeoJSON features and is architected to transition to PostGIS queries.
+Loads GeoJSON features for maritime boundaries and spatial reference.
 """
 
 import math

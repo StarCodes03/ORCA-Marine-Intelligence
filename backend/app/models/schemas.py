@@ -1,7 +1,7 @@
 """ORCA Marine Intelligence - Pydantic Data Models and Schemas
 """
 
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 from pydantic import BaseModel, Field
 
 
@@ -16,6 +16,8 @@ class PlannerOutput(BaseModel):
         description="Identified user intent, e.g. marine_safety, pfz_search, weather_query, general_marine"
     )
     location: Optional[LocationCoords] = None
+    destination: Optional[LocationCoords] = None
+    destination_name: Optional[str] = None
     time_range: Optional[str] = None
     activity: Optional[str] = None
     vessel_type: Optional[str] = None
@@ -204,9 +206,27 @@ class TransitWaypoint(BaseModel):
     description: Optional[str] = None
 
 
+class RouteAlternative(BaseModel):
+    alternative_id: str
+    name: str
+    total_distance_km: float
+    total_distance_nm: float
+    estimated_duration_hours: float
+    estimated_fuel_litres: Optional[float] = None
+    fuel_type: Optional[str] = None
+    intersects_restricted_zone: bool = False
+    intersected_zones: List[str] = Field(default_factory=list)
+    route_risk_index: Optional[float] = None
+    route_risk_level: Optional[str] = None
+    waypoints: List[TransitWaypoint] = Field(default_factory=list)
+    geojson_feature: Dict[str, Any] = Field(default_factory=dict)
+    is_recommended: bool = False
+    recommendation_reason: Optional[str] = None
+
+
 class TransitRoute(BaseModel):
     origin: LocationCoords
-    destination: NearestPFZ
+    destination: Union[NearestPFZ, LocationCoords]
     waypoints: List[TransitWaypoint] = Field(default_factory=list)
     total_distance_km: float
     total_distance_nm: float
@@ -218,6 +238,9 @@ class TransitRoute(BaseModel):
     clearance_buffer_km: float = 1.5
     geojson_feature: Dict[str, Any] = Field(default_factory=dict)
     fuel_estimate_note: str = ""
+    alternatives: List[RouteAlternative] = Field(default_factory=list)
+    environmental_evaluations: Optional[List[Dict[str, Any]]] = None
+    evaluation_limitation: Optional[str] = None
 
 
 class TimeWindowMetrics(BaseModel):
@@ -258,11 +281,14 @@ class RouteRiskAssessment(BaseModel):
     limiting_factor: str
     reasons: List[str] = Field(default_factory=list)
     disclaimer: str
+    temporal_comparison: Optional[Dict[str, Any]] = None
 
 
 class ConversationContext(BaseModel):
     conversation_id: str
     location: Optional[LocationCoords] = None
+    destination: Optional[LocationCoords] = None
+    destination_name: Optional[str] = None
     date: Optional[str] = None
     time_window: Optional[str] = None
     activity: Optional[str] = None
@@ -308,3 +334,26 @@ class ChatResponse(BaseModel):
     agent_trace: List[str] = Field(default_factory=list)
     spatial_features: Optional[Dict[str, Any]] = None
     context: Optional[ConversationContext] = None
+    alerts: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class MaritimeAlert(BaseModel):
+    id: str
+    conversation_id: Optional[str] = None
+    severity: str
+    title: str
+    message: str
+    zone_id: Optional[str] = None
+    created_at: str
+    is_active: bool = True
+
+
+class AlertEvaluationRequest(BaseModel):
+    vessel_latitude: float
+    vessel_longitude: float
+    vessel_type: Optional[str] = None
+    wave_height_m: Optional[float] = None
+    wind_speed_kmh: Optional[float] = None
+    route_waypoints: Optional[List[List[float]]] = None
+    conversation_id: Optional[str] = None
+    persist: bool = True

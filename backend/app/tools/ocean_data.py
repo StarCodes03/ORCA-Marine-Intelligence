@@ -82,11 +82,33 @@ class MockOceanDataAdapter:
         }
 
 
+from app.tools.base_adapter import SourceProvenanceMetadata
+
+
 class OpenMeteoMarineAdapter:
     """Live marine adapter querying official Open-Meteo Marine Forecast API."""
 
     SOURCE_NAME = "OPEN_METEO_MARINE"
     BASE_URL = "https://marine-api.open-meteo.com/v1/marine"
+
+    @classmethod
+    def get_provenance(cls, is_live: bool = True, is_fallback: bool = False) -> SourceProvenanceMetadata:
+        """Return standardized provenance metadata."""
+        return SourceProvenanceMetadata(
+            source_id="open_meteo_marine",
+            source_name=cls.SOURCE_NAME if not is_fallback else "MOCK_OCEAN_DATA",
+            source_type="LIVE_API" if (is_live and not is_fallback) else "MOCK_FALLBACK",
+            coverage="Global Ocean Gridded Hydrodynamic Models (Copernicus / ECMWF WAM)",
+            update_frequency="Hourly",
+            fetched_at=datetime.now(timezone.utc) if (is_live and not is_fallback) else None,
+            is_live=is_live and not is_fallback,
+            is_mock=is_fallback,
+            is_fallback=is_fallback,
+            limitations=[
+                "Chlorophyll-a requires specialized optical ocean color satellite credentials (Copernicus / NASA).",
+                "Tidal sea-level trends represent astronomical/hydrodynamic models rather than acoustic gauge readings."
+            ]
+        )
 
     @staticmethod
     def _calculate_sea_state(wave_height_m: float) -> str:

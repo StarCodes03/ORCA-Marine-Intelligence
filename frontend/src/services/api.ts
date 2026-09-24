@@ -8,7 +8,9 @@ export interface LocationCoords {
   longitude: number;
 }
 
-export type DataSourceStatus = 'LIVE' | 'DEMO / MOCK' | 'MOCK FALLBACK' | 'UNAVAILABLE' | 'OFFICIAL SNAPSHOT';
+export type DataSourceStatus = 'LIVE' | 'DEMO / MOCK' | 'MOCK FALLBACK' | 'UNAVAILABLE' | 'UNSUPPORTED' | 'OFFICIAL SNAPSHOT' | 'READY';
+
+export type GlobalSourceStatus = 'READY' | 'LIVE (HYBRID)' | 'MOCK FALLBACK' | 'OFFICIAL SNAPSHOT' | 'DEMO / MOCK';
 
 export interface UnitMetadata {
   value: number | string | null;
@@ -59,9 +61,72 @@ export interface OceanData {
   raw_metadata?: Record<string, any> | null;
 }
 
-export function deriveWeatherStatus(weather?: WeatherData | null): DataSourceStatus {
-  if (!weather) return 'DEMO / MOCK';
-  if (weather.source === 'OPEN_METEO_WEATHER' && !weather.is_mock) {
+export function deriveGlobalSourceStatus(
+  latestResponse?: ChatResponse | null,
+  hasQueried: boolean = false
+): GlobalSourceStatus {
+  // 1. Before first successful query/response, return neutral READY state
+  if (!hasQueried || !latestResponse) {
+    return 'READY';
+  }
+
+  // Validate that response contains actual completed intelligence
+  const hasValidResponse = Boolean(
+    latestResponse.answer ||
+    (latestResponse.agent_trace && latestResponse.agent_trace.length > 0) ||
+    latestResponse.intent
+  );
+  if (!hasValidResponse) {
+    return 'READY';
+  }
+
+  const weather = latestResponse.weather;
+  const ocean = latestResponse.ocean;
+  const geospatial = latestResponse.geospatial;
+
+  // 2. MOCK FALLBACK: only when a live adapter actually failed and the response indicates fallback
+  const isWeatherFallback = Boolean(
+    weather && weather.is_mock && (weather.is_fallback || weather.raw_metadata?.is_fallback)
+  );
+  const isOceanFallback = Boolean(
+    ocean && ocean.is_mock && (ocean.is_fallback || ocean.raw_metadata?.is_fallback)
+  );
+  const isGisFallback = Boolean(
+    geospatial && (geospatial.source_type === 'MOCK_FALLBACK' || (geospatial.is_mock && geospatial.source !== 'INCOIS'))
+  );
+
+  if (isWeatherFallback || isOceanFallback || isGisFallback) {
+    return 'MOCK FALLBACK';
+  }
+
+  // 3. LIVE (HYBRID): when live Open-Meteo weather or marine data is active
+  const isWeatherLive = Boolean(weather && !weather.is_mock && weather.source === 'OPEN_METEO_WEATHER');
+  const isOceanLive = Boolean(ocean && !ocean.is_mock && ocean.source === 'OPEN_METEO_MARINE');
+
+  if (isWeatherLive || isOceanLive) {
+    return 'LIVE (HYBRID)';
+  }
+
+  // 4. OFFICIAL SNAPSHOT: where appropriate for PFZ-only provenance (no live weather/ocean invoked)
+  const isGisSnapshot = Boolean(geospatial && geospatial.source_type === 'OFFICIAL_SNAPSHOT');
+  if (isGisSnapshot) {
+    return 'OFFICIAL SNAPSHOT';
+  }
+
+  // 5. DEMO / MOCK: if explicit mock demonstration data was returned
+  if (weather?.is_mock || ocean?.is_mock || geospatial?.is_mock) {
+    return 'DEMO / MOCK';
+  }
+
+  return 'READY';
+}
+
+export function deriveWeatherStatus(weather?: WeatherData | null, hasQueried: boolean = false): DataSourceStatus {
+  if (!weather) {
+    return hasQueried ? 'UNAVAILABLE' : 'READY';
+  }
+  const src = (weather.source || '').toUpperCase();
+  if ((src.includes('OPEN_METEO') || src.includes('OPEN-METEO')) && !weather.is_mock) {
     return 'LIVE';
   }
   if (weather.is_mock) {
@@ -73,9 +138,12 @@ export function deriveWeatherStatus(weather?: WeatherData | null): DataSourceSta
   return 'UNAVAILABLE';
 }
 
-export function deriveOceanStatus(ocean?: OceanData | null): DataSourceStatus {
-  if (!ocean) return 'DEMO / MOCK';
-  if (ocean.source === 'OPEN_METEO_MARINE' && !ocean.is_mock) {
+export function deriveOceanStatus(ocean?: OceanData | null, hasQueried: boolean = false): DataSourceStatus {
+  if (!ocean) {
+    return hasQueried ? 'UNAVAILABLE' : 'READY';
+  }
+  const src = (ocean.source || '').toUpperCase();
+  if ((src.includes('OPEN_METEO') || src.includes('OPEN-METEO')) && !ocean.is_mock) {
     return 'LIVE';
   }
   if (ocean.is_mock) {
@@ -87,8 +155,10 @@ export function deriveOceanStatus(ocean?: OceanData | null): DataSourceStatus {
   return 'UNAVAILABLE';
 }
 
-export function deriveGisStatus(geospatial?: GeospatialData | null): DataSourceStatus {
-  if (!geospatial) return 'OFFICIAL SNAPSHOT';
+export function deriveGisStatus(geospatial?: GeospatialData | null, hasQueried: boolean = false): DataSourceStatus {
+  if (!geospatial) {
+    return hasQueried ? 'OFFICIAL SNAPSHOT' : 'READY';
+  }
   if (geospatial.source_type === 'OFFICIAL_SNAPSHOT') {
     return 'OFFICIAL SNAPSHOT';
   }
@@ -101,21 +171,18 @@ export function deriveGisStatus(geospatial?: GeospatialData | null): DataSourceS
   return 'OFFICIAL SNAPSHOT';
 }
 
-export function deriveLightningStatus(weather?: WeatherData | null): DataSourceStatus {
-  if (!weather) return 'UNAVAILABLE';
-  const val = (weather.lightning_risk || '').toLowerCase();
-  if (val === 'unsupported' || val === 'unavailable' || val === 'n/a' || val === '') {
-    return 'UNAVAILABLE';
-  }
-  if (weather.is_mock) {
+export function deriveLightningStatus(weather?: WeatherData | null, hasQueried: boolean = false): DataSourceStatus {
+  if (!hasQueried) return 'READY';
+  if (weather?.is_mock) {
     return (weather.raw_metadata?.is_fallback || weather.is_fallback)
       ? 'MOCK FALLBACK'
       : 'DEMO / MOCK';
   }
-  return 'UNAVAILABLE';
+  return 'UNSUPPORTED';
 }
 
-export function deriveChlorophyllStatus(ocean?: OceanData | null): DataSourceStatus {
+export function deriveChlorophyllStatus(ocean?: OceanData | null, hasQueried: boolean = false): DataSourceStatus {
+  if (!hasQueried) return 'READY';
   if (!ocean || ocean.chlorophyll_mg_m3 == null) {
     return 'UNAVAILABLE';
   }
@@ -151,6 +218,23 @@ export interface RestrictedZoneCheck {
   zone_name?: string | null;
   zone_id?: string | null;
   distance_to_nearest_zone_km?: number | null;
+}
+
+export interface PFZComparisonResult {
+  target_a: NearestPFZ;
+  target_b: NearestPFZ;
+  closer_target: string;
+  distance_difference_km: number;
+  bearing_difference_deg?: number | null;
+  depth_comparison: string;
+  geofence_status_a: string;
+  geofence_status_b: string;
+  intersected_zones_a: string[];
+  intersected_zones_b: string[];
+  direct_route_intersects_a: boolean;
+  direct_route_intersects_b: boolean;
+  unavailable_fields: string[];
+  disclaimer: string;
 }
 
 export interface GeospatialData {
@@ -260,6 +344,61 @@ export interface VesselProfile {
   fuel_estimate_note?: string;
 }
 
+export interface CanonicalVesselProfile extends VesselProfile {
+  icon: string;
+}
+
+export const CANONICAL_VESSEL_PROFILES: Record<string, CanonicalVesselProfile> = {
+  traditional_craft: {
+    vessel_type: 'traditional_craft',
+    name: 'Artisanal Traditional Craft',
+    name_ml: 'പരമ്പരാഗത വള്ളം (തടി/കട്ടമരം)',
+    icon: '🛶',
+    description: 'Non-motorized dugout canoe, catamaran, or plank-built craft (< 8 meters).',
+    parameter_notice: 'Configurable prototype/demo parameter for research and demonstration only; not an official maritime regulation or authoritative seaworthiness limit.',
+    wave_max_safe: 1.0,
+    wave_max_moderate: 1.5,
+    wind_max_safe: 20.0,
+    wind_max_moderate: 28.0,
+    cruising_speed_knots: 3.5,
+    fuel_consumption_l_per_hour: 0.0,
+    fuel_type: 'Manual / Sail',
+    fuel_estimate_note: 'Non-motorized craft (zero fuel consumption; configurable prototype parameter).'
+  },
+  motorized_frp_obm: {
+    vessel_type: 'motorized_frp_obm',
+    name: 'Motorized FRP Canoe (OBM)',
+    name_ml: 'മോട്ടോർ ഘടിപ്പിച്ച എഫ്.ആർ.പി വള്ളം (OBM)',
+    icon: '🚤',
+    description: 'Fiberglass reinforced plastic (FRP) canoe (8–10 meters) with 9.9–25 HP outboard motor.',
+    parameter_notice: 'Configurable prototype/demo parameter for research and demonstration only; not an official maritime regulation or authoritative seaworthiness limit.',
+    wave_max_safe: 1.6,
+    wave_max_moderate: 2.2,
+    wind_max_safe: 30.0,
+    wind_max_moderate: 38.0,
+    cruising_speed_knots: 7.5,
+    fuel_consumption_l_per_hour: 6.5,
+    fuel_type: 'Kerosene / Petrol Mix',
+    fuel_estimate_note: 'Demonstration/prototype estimate (~6.5 L/hr nominal at cruising throttle; not authoritative fuel planning).'
+  },
+  mechanized_trawler: {
+    vessel_type: 'mechanized_trawler',
+    name: 'Mechanized Trawler / Ring Seiner',
+    name_ml: 'യന്ത്രവൽകൃത ബോട്ട് / ട്രോളർ',
+    icon: '🚢',
+    description: 'Inboard diesel mechanized fishing vessel (10–25 meters) with forward wheelhouse.',
+    parameter_notice: 'Configurable prototype/demo parameter for research and demonstration only; not an official maritime regulation or authoritative seaworthiness limit.',
+    wave_max_safe: 2.5,
+    wave_max_moderate: 3.2,
+    wind_max_safe: 42.0,
+    wind_max_moderate: 52.0,
+    cruising_speed_knots: 9.0,
+    fuel_consumption_l_per_hour: 18.0,
+    fuel_type: 'High Speed Marine Diesel',
+    fuel_estimate_note: 'Demonstration/prototype estimate (~18.0 L/hr nominal inboard diesel consumption; not authoritative fuel planning).'
+  }
+};
+
 export interface TransitWaypoint {
   name: string;
   latitude: number;
@@ -267,9 +406,27 @@ export interface TransitWaypoint {
   description?: string;
 }
 
+export interface RouteAlternative {
+  alternative_id: string;
+  name: string;
+  total_distance_km: number;
+  total_distance_nm: number;
+  estimated_duration_hours: number;
+  estimated_fuel_litres?: number | null;
+  fuel_type?: string | null;
+  intersects_restricted_zone: boolean;
+  intersected_zones: string[];
+  route_risk_index?: number | null;
+  route_risk_level?: string | null;
+  waypoints: TransitWaypoint[];
+  geojson_feature: Record<string, any>;
+  is_recommended: boolean;
+  recommendation_reason?: string | null;
+}
+
 export interface TransitRoute {
   origin: LocationCoords;
-  destination: NearestPFZ;
+  destination: NearestPFZ | LocationCoords;
   waypoints: TransitWaypoint[];
   total_distance_km: number;
   total_distance_nm: number;
@@ -281,6 +438,9 @@ export interface TransitRoute {
   clearance_buffer_km: number;
   geojson_feature: Record<string, any>;
   fuel_estimate_note: string;
+  alternatives?: RouteAlternative[];
+  environmental_evaluations?: Array<Record<string, any>>;
+  evaluation_limitation?: string | null;
 }
 
 export interface ConversationContext {
@@ -313,6 +473,10 @@ export interface ChatResponse {
   geospatial?: GeospatialData | null;
   transit_route?: TransitRoute | null;
   vessel_profile?: VesselProfile | null;
+  temporal_comparison?: TemporalComparisonResult | null;
+  route_risk?: RouteRiskAssessment | null;
+  candidate_pfzs?: NearestPFZ[];
+  pfz_comparison?: PFZComparisonResult | null;
   evidence: EvidenceItem[];
   agent_trace: string[];
   spatial_features?: {
@@ -323,6 +487,7 @@ export interface ChatResponse {
     route?: Record<string, any> | null;
   } | null;
   context?: ConversationContext | null;
+  alerts?: Array<Record<string, any>>;
 }
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';

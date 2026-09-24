@@ -23,17 +23,26 @@ KNOWN_LOCATIONS: Dict[str, Dict[str, Any]] = {
     "vypin": {"name": "Vypin", "latitude": 10.0500, "longitude": 76.2100},
     "vypeen": {"name": "Vypin", "latitude": 10.0500, "longitude": 76.2100},
     "munambam": {"name": "Munambam", "latitude": 10.1800, "longitude": 76.1700},
+    "munambam harbor": {"name": "Munambam Harbor", "latitude": 10.1850, "longitude": 76.1680},
     "kuzhuppilly": {"name": "Kuzhuppilly", "latitude": 10.1700, "longitude": 76.1700},
     "fortkochi": {"name": "Fort Kochi", "latitude": 9.9600, "longitude": 76.2400},
     "fort kochi": {"name": "Fort Kochi", "latitude": 9.9600, "longitude": 76.2400},
     "kalamukku": {"name": "Kalamukku", "latitude": 9.9800, "longitude": 76.2300},
     "valarpadam": {"name": "Valarpadam", "latitude": 9.9800, "longitude": 76.2500},
     "vallarpadam": {"name": "Valarpadam", "latitude": 9.9800, "longitude": 76.2500},
+    "alappuzha": {"name": "Alappuzha", "latitude": 9.4981, "longitude": 76.3388},
+    "alleppey": {"name": "Alappuzha", "latitude": 9.4981, "longitude": 76.3388},
+    "chavakkad": {"name": "Chavakkad", "latitude": 10.5300, "longitude": 76.0200},
+    "thoppumpady": {"name": "Thoppumpady", "latitude": 9.9320, "longitude": 76.2620},
+    "willingdon island": {"name": "Willingdon Island", "latitude": 9.9500, "longitude": 76.2700},
+    "ernakulam wharf": {"name": "Ernakulam Wharf", "latitude": 9.9650, "longitude": 76.2650},
+    "cochin fisheries harbour": {"name": "Cochin Fisheries Harbour", "latitude": 9.9400, "longitude": 76.2600},
     "കൊച്ചി": {"name": "Kochi", "latitude": 9.9312, "longitude": 76.2673},
     "ചെല്ലാനം": {"name": "Chellanam", "latitude": 9.8000, "longitude": 76.2600},
     "വൈപ്പിൻ": {"name": "Vypin", "latitude": 10.0500, "longitude": 76.2100},
     "മുനമ്പം": {"name": "Munambam", "latitude": 10.1800, "longitude": 76.1700},
     "കുഴുപ്പിള്ളി": {"name": "Kuzhuppilly", "latitude": 10.1700, "longitude": 76.1700},
+    "ആലപ്പുഴ": {"name": "Alappuzha", "latitude": 9.4981, "longitude": 76.3388},
 }
 
 
@@ -41,15 +50,103 @@ class ContextResolver:
     """Deterministic multi-turn context resolver and intent classifier."""
 
     @staticmethod
+    def extract_coordinates(text: str) -> Optional[LocationCoords]:
+        """Extract explicit coordinate pairs like '9.85, 76.15', '9.85N, 76.15E'."""
+        m = re.search(r"\b(\d{1,2}(?:\.\d+)?)\s*(?:°\s*)?[nN]?\s*[,/ ]\s*(\d{1,3}(?:\.\d+)?)\s*(?:°\s*)?[eE]?\b", text)
+        if m:
+            try:
+                lat = float(m.group(1))
+                lon = float(m.group(2))
+                if 7.0 <= lat <= 15.0 and 70.0 <= lon <= 80.0:
+                    return LocationCoords(
+                        name=f"Coordinates ({lat:.4f}°N, {lon:.4f}°E)",
+                        latitude=round(lat, 4),
+                        longitude=round(lon, 4)
+                    )
+            except Exception:
+                pass
+        return None
+
+    @classmethod
+    def extract_destination(
+        cls,
+        text: str,
+        candidates: List[NearestPFZ],
+        selected_pfz: Optional[NearestPFZ],
+        prior_dest: Optional[LocationCoords] = None
+    ) -> Tuple[Optional[LocationCoords], Optional[NearestPFZ], Optional[str]]:
+        """Extract explicit destination by place name, coordinates, or PFZ referent."""
+        text_lower = text.lower()
+
+        # 1. Check "from <origin> to <destination>" pattern
+        from_to_match = re.search(r"\bfrom\s+([a-zA-Z\s]+?)\s+to\s+([a-zA-Z0-9\s,\.]+)", text_lower)
+        if from_to_match:
+            dest_part = from_to_match.group(2).strip()
+            coord_dest = cls.extract_coordinates(dest_part)
+            if coord_dest:
+                return coord_dest, None, coord_dest.name
+            for key, c_data in KNOWN_LOCATIONS.items():
+                if key in dest_part or dest_part.startswith(key):
+                    loc = LocationCoords(**c_data)
+                    return loc, None, loc.name
+
+        # 2. Check for coordinate destination
+        coords = cls.extract_coordinates(text)
+        if coords and any(w in text_lower for w in ["to", "route", "destination", "sail", "head", "navigate", "reach"]):
+            return coords, None, coords.name
+
+        # 3. Check for destination referents: "to target 2", "to the second PFZ", "to nearest PFZ"
+        if any(w in text_lower for w in ["to target", "to the second", "to second", "to the first", "to first", "to that target", "to that pfz", "to the pfz", "nearest pfz"]):
+            ord_idx = cls.extract_ordinal_index(text_lower)
+            if ord_idx is not None and candidates and len(candidates) > ord_idx:
+                tgt = candidates[ord_idx]
+                loc = LocationCoords(name=tgt.name, latitude=tgt.latitude, longitude=tgt.longitude)
+                return loc, tgt, tgt.name
+            elif selected_pfz is not None:
+                loc = LocationCoords(name=selected_pfz.name, latitude=selected_pfz.latitude, longitude=selected_pfz.longitude)
+                return loc, selected_pfz, selected_pfz.name
+
+        # 4. Check for "the destination" / "that destination"
+        if re.search(r"\b(?:the|that)\s+destination\b", text_lower) and prior_dest is not None:
+            return prior_dest.model_copy(), None, prior_dest.name
+
+        # 5. Check for explicit place name destination: "route to Munambam", "head to Chellanam", "sail to Vypin"
+        dest_match = re.search(r"\b(?:route\s+to|corridor\s+to|head\s+to|heading\s+to|sail\s+to|sailing\s+to|navigate\s+to|destination\s+(?:to|is)?|travel\s+to|go\s+to|reach|passage\s+to)\s+([a-zA-Z\s]+)", text_lower)
+        if dest_match:
+            candidate_name = dest_match.group(1).strip()
+            candidate_name = re.sub(r"\s+from\s+.*$", "", candidate_name).strip()
+            if any(term in candidate_name for term in ["pfz", "target", "fishing zone"]):
+                return None, None, None
+            for key, c_data in KNOWN_LOCATIONS.items():
+                if key in candidate_name or candidate_name.startswith(key):
+                    loc = LocationCoords(**c_data)
+                    return loc, None, loc.name
+
+        return None, None, None
+
+    @staticmethod
     def extract_location(text: str, prior_loc: Optional[LocationCoords] = None) -> Optional[LocationCoords]:
         """Extract explicit geographic reference or inherit from prior context without inventing."""
         text_lower = text.lower()
-        for key, coords in KNOWN_LOCATIONS.items():
-            # Support word boundary for ASCII and substring for Malayalam/multilingual
-            if (key in text_lower) if any(ord(c) > 127 for c in key) else re.search(r"\b" + re.escape(key) + r"\b", text_lower):
-                return LocationCoords(**coords)
 
-        # Inherit prior location if present
+        # Check explicit origin "from <origin>"
+        from_match = re.search(r"\bfrom\s+([a-zA-Z\s]+?)(?:\s+to\b|$)", text_lower)
+        if from_match:
+            origin_candidate = from_match.group(1).strip()
+            for key, coords_dict in KNOWN_LOCATIONS.items():
+                if key in origin_candidate or origin_candidate.startswith(key):
+                    return LocationCoords(**coords_dict)
+
+        # Check explicit coordinates (if not designated as destination via 'to <coords>')
+        if not re.search(r"\bto\s+\d", text_lower):
+            coords = ContextResolver.extract_coordinates(text)
+            if coords:
+                return coords
+
+        for key, coords_dict in KNOWN_LOCATIONS.items():
+            if (key in text_lower) if any(ord(c) > 127 for c in key) else re.search(r"\b" + re.escape(key) + r"\b", text_lower):
+                return LocationCoords(**coords_dict)
+
         if prior_loc:
             return prior_loc.model_copy()
 
@@ -167,6 +264,8 @@ class ContextResolver:
 
         # Retrieve prior fields
         p_loc = prior_context.location if prior_context else None
+        p_dest = prior_context.destination if prior_context else None
+        p_dest_name = prior_context.destination_name if prior_context else None
         p_date = prior_context.date if prior_context else None
         p_win = prior_context.time_window if prior_context else None
         p_act = prior_context.activity if prior_context else None
@@ -179,6 +278,13 @@ class ContextResolver:
         p_pfz_comparison = prior_context.pfz_comparison if prior_context else None
         p_route = prior_context.active_route if prior_context else None
         turn_count = prior_context.turn_count if prior_context else 0
+
+        # Destination resolution (M5)
+        dest_loc, dest_pfz, dest_name = cls.extract_destination(text, p_candidates, p_pfz, p_dest)
+        destination = dest_loc or p_dest
+        destination_name = dest_name or p_dest_name
+        if dest_pfz:
+            p_pfz = dest_pfz
 
         # Extract current or inherited fields
         location = cls.extract_location(text, p_loc)
@@ -341,20 +447,51 @@ class ContextResolver:
                 clarification_reason = "missing_referent_target"
                 logger.info("[ContextResolver] 'How far is it' failed safely: no prior target found.")
 
-        # Scenario 1b: Safe Passage Corridor / Navigation Route Query
-        elif any(w in text_lower for w in ["route", "corridor", "passage", "waypoint", "how to reach", "safe route", "navigate", "റൂട്ട്", "പാത", "സഞ്ചാര പാത"]):
+        # Scenario 1b-0: Route Risk Temporal Query ("is the route getting riskier?", "will the route get riskier tomorrow?")
+        elif bool(
+            re.search(r"\b(?:is|will)\s+(?:the\s+)?route\s+(?:getting|get|be)\s+riskier\b", text_lower) or
+            re.search(r"\broute\s+risk\s+(?:tomorrow|later|afternoon|change)\b", text_lower)
+        ):
+            intent = "route_risk_temporal"
+            required_agents = ["weather", "ocean", "geospatial"]
+            activity = "navigation"
+            if location is None:
+                location = LocationCoords(name="Kochi", latitude=9.9312, longitude=76.2673)
+            d_prefix = date or p_date or "tomorrow"
+            if p_win and "morning" in p_win:
+                compare_windows = [f"{d_prefix}_morning", f"{d_prefix}_afternoon"]
+            else:
+                compare_windows = ["current", f"{d_prefix}_morning"]
+
+        # Scenario 1b-1: Route Alternatives Query ("compare routes", "route alternatives", "alternative paths")
+        elif any(w in text_lower for w in ["compare routes", "route alternatives", "alternative routes", "route options", "alternative paths"]):
+            intent = "route_alternatives"
+            required_agents = ["weather", "ocean", "geospatial"]
+            activity = "navigation"
+            if location is None:
+                location = LocationCoords(name="Kochi", latitude=9.9312, longitude=76.2673)
+
+        # Scenario 2: "What if I go toward the nearest PFZ?"
+        elif is_pfz_referent and any(w in text_lower for w in ["go", "head", "sail", "safe", "what if"]) and not any(w in text_lower for w in ["route", "corridor", "passage", "waypoint"]):
+            intent = "marine_safety"
+            required_agents = ["weather", "ocean", "geospatial"]
+            activity = "fishing"
+
+        # Scenario 1b-2: Safe Passage Corridor / Navigation Route Query
+        elif any(w in text_lower for w in ["route", "corridor", "passage", "waypoint", "how to reach", "safe route", "navigate", "റൂട്ട്", "പാത", "സഞ്ചാര പാത"]) or (dest_loc is not None and any(w in text_lower for w in ["route", "head to", "sail to", "navigate to", "passage to", "corridor to", "go to"])):
             intent = "safe_passage_route"
             required_agents = ["weather", "ocean", "geospatial"]
             activity = "navigation"
             if location is None:
                 location = LocationCoords(name="Kochi", latitude=9.9312, longitude=76.2673)
 
-        # Scenario 1c: Temporal Condition Comparison ("Is morning or afternoon better?", "How will conditions change tomorrow?")
+        # Scenario 1c: Temporal Condition Comparison ("Is morning or afternoon better?", "How will conditions change tomorrow?", "Will the sea be calmer later?")
         elif bool(
             re.search(r"\b(morning\s+(or|vs|and)\s+afternoon|afternoon\s+(or|vs|and)\s+morning)\b", text_lower) or
             re.search(r"\b(today\s+(or|vs|and)\s+tomorrow|tomorrow\s+(or|vs|and)\s+today)\b", text_lower) or
             re.search(r"\b(is|which\s+is)\s+(morning|afternoon)\s+better\b", text_lower) or
             re.search(r"\b(how\s+will\s+conditions\s+change|will\s+conditions\s+improve)\b", text_lower) or
+            re.search(r"\b(will\s+(?:the\s+)?sea\s+be\s+calmer|calmer\s+later|calmer\s+tomorrow|is\s+it\s+calmer)\b", text_lower) or
             re.search(r"\b(compare\s+(conditions|morning|afternoon|today|tomorrow))\b", text_lower) or
             ("രാവിലെയാണോ" in text_lower or "ഉച്ചയ്ക്കാണോ" in text_lower or "ഇന്ന് vs നാളെ" in text_lower) or
             (p_intent in ["marine_safety", "weather_query", "temporal_comparison"] and re.search(r"\b(is\s+afternoon\s+better|is\s+morning\s+better)\b", text_lower))
@@ -365,8 +502,11 @@ class ContextResolver:
                 location = LocationCoords(name="Kochi", latitude=9.9312, longitude=76.2673)
 
             # Determine window pairs
-            if ("today" in text_lower and "tomorrow" in text_lower) or "change tomorrow" in text_lower or "improve tomorrow" in text_lower:
+            if ("today" in text_lower and "tomorrow" in text_lower) or "change tomorrow" in text_lower or "improve tomorrow" in text_lower or "calmer tomorrow" in text_lower:
                 compare_windows = ["current", "tomorrow_morning"]
+            elif ("calmer later" in text_lower or "sea be calmer" in text_lower) and not ("tomorrow" in text_lower):
+                d_prefix = date or p_date or "tomorrow"
+                compare_windows = [f"{d_prefix}_morning", f"{d_prefix}_afternoon"]
             elif "afternoon" in text_lower and ("morning" in text_lower or (p_win and "morning" in p_win)):
                 d_prefix = date or p_date or "tomorrow"
                 compare_windows = [f"{d_prefix}_morning", f"{d_prefix}_afternoon"]
@@ -376,12 +516,6 @@ class ContextResolver:
             else:
                 d_prefix = date or p_date or "tomorrow"
                 compare_windows = [f"{d_prefix}_morning", f"{d_prefix}_afternoon"]
-
-        # Scenario 2: "What if I go toward the nearest PFZ?"
-        elif is_pfz_referent and any(w in text_lower for w in ["go", "head", "sail", "safe", "what if"]):
-            intent = "marine_safety"
-            required_agents = ["weather", "ocean", "geospatial"]
-            activity = "fishing"
 
         # Scenario 3: Follow-up modifier ("What about afternoon?", "What about the second one?", "What about Chellanam?")
         elif is_followup_modifier and not any(w in text_lower for w in ["pfz", "fishing zone"]):
@@ -456,6 +590,8 @@ class ContextResolver:
         plan = PlannerOutput(
             intent=intent,
             location=location,
+            destination=destination,
+            destination_name=destination_name,
             time_range=time_range or "tomorrow_morning",
             activity=activity,
             vessel_type=vessel_type,
@@ -472,6 +608,8 @@ class ContextResolver:
         updated_context = ConversationContext(
             conversation_id=conv_id,
             location=location,
+            destination=destination,
+            destination_name=destination_name,
             date=date,
             time_window=time_window,
             activity=activity,

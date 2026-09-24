@@ -268,6 +268,33 @@ class EvidenceAgent:
                 raw_data=transit_route.model_dump()
             ))
 
+            if transit_route.alternatives:
+                rec_alts = [a.name for a in transit_route.alternatives if a.is_recommended]
+                rec_str = rec_alts[0] if rec_alts else transit_route.alternatives[0].name
+                evidence_items.append(EvidenceItem(
+                    category="calculated",
+                    claim=(
+                        f"Route alternatives generated: {len(transit_route.alternatives)} navigational corridor options evaluated "
+                        f"(Direct, Safe Corridor, High-Clearance Seaward). Deterministically recommended option: '{rec_str}'."
+                    ),
+                    source="ALTERNATIVE_CORRIDOR_ENGINE",
+                    raw_data={"alternatives": [a.model_dump() for a in transit_route.alternatives]}
+                ))
+
+            if transit_route.environmental_evaluations:
+                evidence_items.append(EvidenceItem(
+                    category="derived_calculation",
+                    claim=(
+                        f"Route environmental evaluation sampled at {len(transit_route.environmental_evaluations)} corridor points. "
+                        f"{transit_route.evaluation_limitation or 'Sampled from coastal/forecast models.'}"
+                    ),
+                    source="ROUTE_ENVIRONMENTAL_SAMPLER",
+                    raw_data={
+                        "evaluations": transit_route.environmental_evaluations,
+                        "limitation": transit_route.evaluation_limitation
+                    }
+                ))
+
         # 6. Temporal comparison evidence
         if temporal_comparison:
             evidence_items.append(EvidenceItem(
@@ -294,6 +321,19 @@ class EvidenceAgent:
                 source="PROTOTYPE_ROUTE_RISK_ENGINE",
                 raw_data=route_risk.model_dump()
             ))
+
+            if route_risk.temporal_comparison:
+                tr_comp = route_risk.temporal_comparison
+                evidence_items.append(EvidenceItem(
+                    category="derived_calculation",
+                    claim=(
+                        f"Temporal route risk comparison: Risk index shifts from {tr_comp.departure_risk_index}/10 ({tr_comp.departure_window}) "
+                        f"to {tr_comp.arrival_risk_index}/10 ({tr_comp.arrival_window}) (Δ: {tr_comp.delta_risk_index:+0.1f}). "
+                        f"Recommendation: {tr_comp.recommendation}."
+                    ),
+                    source="TEMPORAL_ROUTE_RISK_ENGINE",
+                    raw_data=tr_comp.model_dump()
+                ))
 
         # 8. Deterministic PFZ candidate reasoning evidence (M5 Step 3)
         if planner_plan.intent == "pfz_radius_filter":

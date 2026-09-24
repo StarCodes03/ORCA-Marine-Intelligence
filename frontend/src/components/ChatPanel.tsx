@@ -11,8 +11,7 @@ import {
   Navigation,
   Sparkles,
   Database,
-  MapPin,
-  Info
+  MapPin
 } from 'lucide-react';
 import type { ChatResponse } from '../services/api';
 import { DataSourcesSection } from './DataSourcesSection';
@@ -31,10 +30,13 @@ interface ChatPanelProps {
   isLoading: boolean;
   onSelectPfz?: (pfz: any) => void;
   latestResponse?: ChatResponse | null;
+  hasQueried?: boolean;
   selectedVessel?: string;
   onVesselChange?: (vessel: string) => void;
   selectedLanguage?: string;
   onLanguageChange?: (lang: string) => void;
+  onNavigateToMarine?: () => void;
+  onNavigateToRoute?: () => void;
 }
 
 const QUICK_PROMPTS = [
@@ -62,10 +64,13 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   isLoading,
   onSelectPfz,
   latestResponse,
+  hasQueried = false,
   selectedVessel = 'motorized_frp_obm',
   onVesselChange,
   selectedLanguage = 'english',
   onLanguageChange,
+  onNavigateToMarine,
+  onNavigateToRoute,
 }) => {
   const [inputText, setInputText] = useState('');
   const [localVessel, setLocalVessel] = useState<string>(selectedVessel);
@@ -111,41 +116,96 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     setExpandedMl((prev) => ({ ...prev, [msgId]: !prev[msgId] }));
   };
 
-  // Helper to format prose markdown text cleanly
+  // Helper to format prose markdown text cleanly, including tables
   const renderProse = (content: string) => {
-    const lines = content.split('\n');
-    return lines.map((line, idx) => {
-      const parts = line.split(/(\*\*.*?\*\*)/g);
-      const rendered = parts.map((part, pIdx) => {
+    const rawLines = content.split('\n');
+    const elements: React.ReactNode[] = [];
+    let i = 0;
+
+    const renderInline = (text: string) => {
+      const parts = text.split(/(\*\*.*?\*\*)/g);
+      return parts.map((part, pIdx) => {
         if (part.startsWith('**') && part.endsWith('**')) {
           return <strong key={pIdx}>{part.slice(2, -2)}</strong>;
         }
         return part;
       });
+    };
+
+    while (i < rawLines.length) {
+      const line = rawLines[i];
+
+      // Detect markdown table block (| ... |)
+      if (line.trim().startsWith('|') && line.includes('|')) {
+        const tableLines: string[] = [];
+        while (i < rawLines.length && rawLines[i].trim().startsWith('|')) {
+          tableLines.push(rawLines[i].trim());
+          i++;
+        }
+
+        if (tableLines.length >= 2) {
+          const parseCells = (rowStr: string) => {
+            const stripped = rowStr.replace(/^\|/, '').replace(/\|$/, '');
+            return stripped.split('|').map((c) => c.trim());
+          };
+
+          const headerCells = parseCells(tableLines[0]);
+          // Row index 1 is header separator (| :--- | :--- |)
+          const dataRows = tableLines.slice(2).map(parseCells);
+
+          elements.push(
+            <div key={`table-${i}`} className="chat-table-wrapper">
+              <table className="chat-markdown-table">
+                <thead>
+                  <tr>
+                    {headerCells.map((h, hIdx) => (
+                      <th key={hIdx}>{renderInline(h)}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {dataRows.map((row, rIdx) => (
+                    <tr key={rIdx}>
+                      {row.map((cell, cIdx) => (
+                        <td key={cIdx}>{renderInline(cell)}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          );
+          continue;
+        }
+      }
+
+      const rendered = renderInline(line);
 
       if (line.startsWith('>')) {
-        return (
-          <div key={idx} className="prose-note">
+        elements.push(
+          <div key={`line-${i}`} className="prose-note">
             {rendered}
           </div>
         );
-      }
-      if (line.startsWith('•') || line.startsWith('-')) {
-        return (
-          <div key={idx} className="prose-bullet">
+      } else if (line.startsWith('•') || line.startsWith('-')) {
+        elements.push(
+          <div key={`line-${i}`} className="prose-bullet">
             {rendered}
           </div>
         );
+      } else if (!line.trim()) {
+        elements.push(<div key={`line-${i}`} className="prose-space" />);
+      } else {
+        elements.push(
+          <p key={`line-${i}`} className="prose-line">
+            {rendered}
+          </p>
+        );
       }
-      if (!line.trim()) {
-        return <div key={idx} className="prose-space" />;
-      }
-      return (
-        <p key={idx} className="prose-line">
-          {rendered}
-        </p>
-      );
-    });
+      i++;
+    }
+
+    return elements;
   };
 
   const hasContext = Boolean(
@@ -289,7 +349,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       {/* Drawer: Data Sources & Provenance */}
       {isSourcesOpen && (
         <div className="secondary-drawer-panel">
-          <DataSourcesSection latestResponse={latestResponse} compact={true} />
+          <DataSourcesSection latestResponse={latestResponse} compact={true} hasQueried={hasQueried} />
         </div>
       )}
 
@@ -355,7 +415,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
           const msgOcean = msg.responsePayload?.ocean;
           const msgRisk = msg.responsePayload?.risk;
           const msgRoute = msg.responsePayload?.transit_route;
-          const msgVessel = msg.responsePayload?.vessel_profile;
 
           return (
             <div key={msg.id} className={`message-bubble ${isUser ? 'user' : 'assistant'}`}>
@@ -386,7 +445,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                         ) : (
                           <ShieldAlert size={14} />
                         )}
-                        <span>ASSESSED RISK: {msgRisk.risk_level}</span>
+                        <span>ENVIRONMENTAL CONDITION RISK: {msgRisk.risk_level}</span>
                       </div>
                       <span style={{ fontSize: '0.72rem', opacity: 0.9 }}>
                         Score: {msgRisk.risk_score}/10
@@ -428,48 +487,12 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                       )}
                       {msgOcean?.tide && (
                         <div className="telemetry-pill">
-                          <span className="telemetry-pill-label">Tide</span>
-                          <span style={{ textTransform: 'capitalize' }}>{msgOcean.tide}</span>
+                          <span className="telemetry-pill-label">Sea-Level Trend</span>
+                          <span style={{ textTransform: 'capitalize' }}>
+                            {msgOcean.tide.includes('(') ? msgOcean.tide.split('(')[0].trim() : msgOcean.tide}
+                          </span>
                         </div>
                       )}
-                    </div>
-                  )}
-
-                  {/* Vessel Profile Card (when queried) */}
-                  {msgVessel && (
-                    <div className="vessel-profile-compact">
-                      <div style={{ display: 'flex', justifyContent: 'space-between', color: '#38bdf8', fontWeight: 600 }}>
-                        <span>⛵ {msgVessel.name}</span>
-                        <span style={{ fontSize: '0.62rem', background: 'rgba(56, 189, 248, 0.15)', padding: '1px 5px', borderRadius: '3px' }}>
-                          PROTOTYPE PARAMETERS
-                        </span>
-                      </div>
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '4px', marginTop: '4px', fontSize: '0.72rem', color: '#cbd5e1' }}>
-                        <div>Wave Limit: &le; <strong>{msgVessel.wave_max_safe} m</strong></div>
-                        <div>Wind Limit: &le; <strong>{msgVessel.wind_max_safe} km/h</strong></div>
-                        <div>Cruising Speed: <strong>{msgVessel.cruising_speed_knots} kn</strong></div>
-                        <div>Fuel Rate: <strong>{msgVessel.fuel_consumption_l_per_hour} L/h</strong></div>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Safe Passage Corridor Card (when queried) */}
-                  {msgRoute && (
-                    <div className="corridor-summary-compact">
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '5px', color: msgRoute.geofence_avoidance_applied ? '#f59e0b' : '#06b6d4', fontWeight: 600 }}>
-                          <Navigation size={13} />
-                          <span>Safe Passage Corridor</span>
-                        </div>
-                        <span style={{ fontSize: '0.65rem', padding: '1px 6px', borderRadius: '4px', background: msgRoute.geofence_avoidance_applied ? 'rgba(245, 158, 11, 0.2)' : 'rgba(6, 182, 212, 0.2)', color: msgRoute.geofence_avoidance_applied ? '#f59e0b' : '#06b6d4' }}>
-                          {msgRoute.geofence_avoidance_applied ? 'AVOIDANCE ACTIVE' : 'DIRECT TRANSIT'}
-                        </span>
-                      </div>
-                      <div style={{ display: 'flex', gap: '12px', fontSize: '0.72rem', color: '#cbd5e1' }}>
-                        <div>Distance: <strong>{msgRoute.total_distance_km} km</strong></div>
-                        <div>Duration: <strong>~{msgRoute.estimated_duration_hours} h</strong></div>
-                        <div>Fuel: <strong>~{msgRoute.estimated_fuel_litres} L</strong></div>
-                      </div>
                     </div>
                   )}
 
@@ -495,28 +518,53 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                     </div>
                   )}
 
-                  {/* Focus Map Button */}
-                  {(msg.responsePayload?.spatial_features?.nearest_pfz || msg.responsePayload?.geospatial?.nearest_pfz) && onSelectPfz && (
-                    <button
-                      type="button"
-                      className="focus-map-btn"
-                      onClick={() => {
-                        const pfz = msg.responsePayload?.spatial_features?.nearest_pfz || msg.responsePayload?.geospatial?.nearest_pfz;
-                        if (pfz) onSelectPfz(pfz);
-                      }}
-                    >
-                      <MapPin size={12} />
-                      <span>Focus map on target ({msg.responsePayload?.spatial_features?.nearest_pfz?.name || msg.responsePayload?.geospatial?.nearest_pfz?.name})</span>
-                    </button>
-                  )}
+                  {/* Contextual Conversational Action Buttons */}
+                  {(() => {
+                    const cands = msg.responsePayload?.candidate_pfzs || msg.responsePayload?.context?.candidate_pfzs;
+                    const candCount = cands && cands.length > 0 ? cands.length : 0;
+                    const nearestPfz = msg.responsePayload?.spatial_features?.nearest_pfz || msg.responsePayload?.geospatial?.nearest_pfz;
+                    const hasRouteOrCorridor = Boolean(msgRoute || msg.responsePayload?.intent === 'marine_safety' || msg.responsePayload?.intent === 'pfz_geofence_check' || msg.responsePayload?.intent === 'safe_passage_route' || msg.responsePayload?.intent === 'route_alternatives');
 
-                  {/* Subtle Historical Snapshot Notice */}
-                  {msg.responsePayload?.geospatial?.source_type === 'OFFICIAL_SNAPSHOT' && (
-                    <div className="snapshot-notice-subtle">
-                      <Info size={11} />
-                      <span>INCOIS historical PFZ snapshot — not a live fishing advisory.</span>
-                    </div>
-                  )}
+                    return (
+                      <div className="chat-actions-strip">
+                        {/* Action 1: Show all on Marine Map (for PFZ-radius queries with multiple candidates) */}
+                        {candCount > 0 && onNavigateToMarine && (
+                          <button
+                            type="button"
+                            className="chat-action-btn"
+                            onClick={() => onNavigateToMarine()}
+                          >
+                            <MapPin size={13} />
+                            <span>Show all on Marine Map ({candCount} targets)</span>
+                          </button>
+                        )}
+
+                        {/* Action 2: Single Target Map Action */}
+                        {candCount === 0 && nearestPfz && onSelectPfz && (
+                          <button
+                            type="button"
+                            className="chat-action-btn"
+                            onClick={() => onSelectPfz(nearestPfz)}
+                          >
+                            <MapPin size={13} />
+                            <span>View on Marine Map ({nearestPfz.name})</span>
+                          </button>
+                        )}
+
+                        {/* Action 3: Route Dashboard Action */}
+                        {onNavigateToRoute && hasRouteOrCorridor && (
+                          <button
+                            type="button"
+                            className="chat-action-btn route-action"
+                            onClick={() => onNavigateToRoute()}
+                          >
+                            <Navigation size={13} />
+                            <span>Open Safe Passage Corridor in Route & Safety</span>
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
             </div>

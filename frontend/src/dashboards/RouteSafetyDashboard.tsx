@@ -12,7 +12,12 @@ import {
   MessageSquare
 } from 'lucide-react';
 import { MarineMap } from '../map/MarineMap';
-import type { LocationCoords, NearestPFZ, ChatResponse } from '../services/api';
+import {
+  type LocationCoords,
+  type NearestPFZ,
+  type ChatResponse,
+  CANONICAL_VESSEL_PROFILES
+} from '../services/api';
 
 interface RouteSafetyDashboardProps {
   vesselLocation: LocationCoords;
@@ -25,44 +30,6 @@ interface RouteSafetyDashboardProps {
   onSelectPfz?: (pfz: NearestPFZ) => void;
 }
 
-const VESSEL_PROFILES: Record<string, {
-  name: string;
-  icon: string;
-  waveLimit: number;
-  windLimitKts: number;
-  cruisingSpeedKnots: number;
-  fuelRate: number;
-  fuelType: string;
-}> = {
-  traditional_craft: {
-    name: 'Traditional Craft (വള്ളം / Kattumaram)',
-    icon: '🛶',
-    waveLimit: 1.2,
-    windLimitKts: 15.0,
-    cruisingSpeedKnots: 4.5,
-    fuelRate: 0.0,
-    fuelType: 'Manual / Sail',
-  },
-  motorized_frp_obm: {
-    name: 'Motorized FRP Canoe (OBM / എഫ്.ആർ.പി വള്ളം)',
-    icon: '🚤',
-    waveLimit: 1.8,
-    windLimitKts: 22.0,
-    cruisingSpeedKnots: 8.5,
-    fuelRate: 6.0,
-    fuelType: 'Petrol / Kerosene OBM',
-  },
-  mechanized_trawler: {
-    name: 'Mechanized Trawler (ട്രോളർ)',
-    icon: '🚢',
-    waveLimit: 2.8,
-    windLimitKts: 30.0,
-    cruisingSpeedKnots: 7.0,
-    fuelRate: 16.0,
-    fuelType: 'Marine Diesel Inboard',
-  },
-};
-
 export const RouteSafetyDashboard: React.FC<RouteSafetyDashboardProps> = ({
   vesselLocation,
   nearestPfz,
@@ -73,13 +40,16 @@ export const RouteSafetyDashboard: React.FC<RouteSafetyDashboardProps> = ({
   onNavigateToChat,
   onSelectPfz,
 }) => {
-  const profile = VESSEL_PROFILES[selectedVessel] || VESSEL_PROFILES['motorized_frp_obm'];
+  const canonical = CANONICAL_VESSEL_PROFILES[selectedVessel] || CANONICAL_VESSEL_PROFILES['motorized_frp_obm'];
+  const profile = (latestResponse?.vessel_profile && latestResponse.vessel_profile.vessel_type === selectedVessel)
+    ? { ...canonical, ...latestResponse.vessel_profile }
+    : canonical;
 
   // Conditional active route check: ONLY use existing calculated route, DO NOT fabricate
   const activeRoute = latestResponse?.transit_route || latestResponse?.context?.active_route || null;
 
   // Route risk calculation or standard risk assessment
-  const routeRisk = latestResponse?.context?.route_risk || null;
+  const routeRisk = latestResponse?.route_risk || latestResponse?.context?.route_risk || null;
   const standardRisk = latestResponse?.risk || null;
 
   return (
@@ -112,7 +82,7 @@ export const RouteSafetyDashboard: React.FC<RouteSafetyDashboardProps> = ({
 
             {/* Vessel Category Selector */}
             <div className="vessel-select-pills">
-              {Object.entries(VESSEL_PROFILES).map(([key, v]) => (
+              {Object.entries(CANONICAL_VESSEL_PROFILES).map(([key, v]) => (
                 <button
                   key={key}
                   type="button"
@@ -120,7 +90,7 @@ export const RouteSafetyDashboard: React.FC<RouteSafetyDashboardProps> = ({
                   onClick={() => onVesselChange(key)}
                 >
                   <span>{v.icon}</span>
-                  <span>{key.replace(/_/g, ' ')}</span>
+                  <span>{v.name.split('(')[0].trim()}</span>
                 </button>
               ))}
             </div>
@@ -132,19 +102,19 @@ export const RouteSafetyDashboard: React.FC<RouteSafetyDashboardProps> = ({
               </div>
               <div className="vessel-spec-row">
                 <span className="spec-label">Safe Wave Limit:</span>
-                <span className="spec-value">&le; {profile.waveLimit} m</span>
+                <span className="spec-value">&le; {profile.wave_max_safe} m</span>
               </div>
               <div className="vessel-spec-row">
                 <span className="spec-label">Safe Wind Limit:</span>
-                <span className="spec-value">&le; {profile.windLimitKts} kts (~{(profile.windLimitKts * 1.852).toFixed(1)} km/h)</span>
+                <span className="spec-value">&le; {profile.wind_max_safe} km/h (~{(profile.wind_max_safe / 1.852).toFixed(1)} kts)</span>
               </div>
               <div className="vessel-spec-row">
                 <span className="spec-label">Nominal Cruising Speed:</span>
-                <span className="spec-value">{profile.cruisingSpeedKnots} knots (~{(profile.cruisingSpeedKnots * 1.852).toFixed(1)} km/h)</span>
+                <span className="spec-value">{profile.cruising_speed_knots} knots (~{(profile.cruising_speed_knots * 1.852).toFixed(1)} km/h)</span>
               </div>
               <div className="vessel-spec-row">
                 <span className="spec-label">Nominal Fuel Rate:</span>
-                <span className="spec-value">{profile.fuelRate} L/h ({profile.fuelType})</span>
+                <span className="spec-value">{profile.fuel_consumption_l_per_hour} L/h ({profile.fuel_type})</span>
               </div>
             </div>
 
@@ -230,7 +200,7 @@ export const RouteSafetyDashboard: React.FC<RouteSafetyDashboardProps> = ({
             <div className="card-disclaimer-subtle alert">
               <AlertTriangle size={11} color="#f59e0b" />
               <span>
-                The Prototype Route Risk Index is a configurable prototype decision-support metric and is NOT an official maritime safety rating, seaworthiness certification, or regulatory limit.
+                Environmental condition risk evaluates the selected time/location conditions. The Prototype Route Risk Index additionally evaluates route exposure, vessel stress, distance and geofence interaction. It is a configurable prototype decision-support metric and is NOT an official maritime safety rating, seaworthiness certification, or regulatory limit.
               </span>
             </div>
           </div>
@@ -298,6 +268,67 @@ export const RouteSafetyDashboard: React.FC<RouteSafetyDashboardProps> = ({
                   <span className="wp-node destination">Target ({activeRoute.destination.name})</span>
                 </div>
               </div>
+
+              {/* Route Alternatives Comparison */}
+              {activeRoute.alternatives && activeRoute.alternatives.length > 0 && (
+                <div className="route-alternatives-section" style={{ margin: '12px 0' }}>
+                  <div className="waypoints-title" style={{ marginBottom: '8px' }}>
+                    ROUTE ALTERNATIVES COMPARISON ({activeRoute.alternatives.length} OPTIONS):
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '8px' }}>
+                    {activeRoute.alternatives.map((alt) => (
+                      <div
+                        key={alt.alternative_id}
+                        style={{
+                          background: alt.is_recommended ? 'rgba(16, 185, 129, 0.12)' : 'rgba(15, 23, 42, 0.6)',
+                          border: `1px solid ${alt.is_recommended ? '#10b981' : alt.intersects_restricted_zone ? '#ef4444' : '#334155'}`,
+                          borderRadius: '6px',
+                          padding: '10px',
+                          fontSize: '0.78rem',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '4px'
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <strong style={{ color: alt.is_recommended ? '#34d399' : '#f1f5f9' }}>{alt.name}</strong>
+                          {alt.is_recommended && (
+                            <span style={{ background: '#10b981', color: '#0f172a', fontWeight: 700, fontSize: '0.65rem', padding: '2px 6px', borderRadius: '4px' }}>
+                              RECOMMENDED
+                            </span>
+                          )}
+                          {alt.intersects_restricted_zone && (
+                            <span style={{ background: '#ef4444', color: '#ffffff', fontWeight: 600, fontSize: '0.65rem', padding: '2px 6px', borderRadius: '4px' }}>
+                              INTERSECTS ZONE
+                            </span>
+                          )}
+                        </div>
+                        <div style={{ color: '#cbd5e1', fontSize: '0.74rem' }}>
+                          <span>{alt.total_distance_km} km ({alt.total_distance_nm} nm)</span> • <span>~{alt.estimated_duration_hours} h</span> • <span>~{alt.estimated_fuel_litres ?? 0} L</span>
+                        </div>
+                        {alt.route_risk_index !== null && alt.route_risk_index !== undefined && (
+                          <div style={{ fontSize: '0.72rem', color: '#94a3b8' }}>
+                            Route Risk Index: <strong>{alt.route_risk_index.toFixed(1)}</strong> ({alt.route_risk_level || 'LOW'})
+                          </div>
+                        )}
+                        {alt.recommendation_reason && (
+                          <div style={{ fontSize: '0.7rem', color: '#6ee7b7', fontStyle: 'italic', marginTop: '2px' }}>
+                            {alt.recommendation_reason}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Environmental Discrete Sampling Limitation Disclaimer */}
+              {activeRoute.evaluation_limitation && (
+                <div className="card-disclaimer-subtle alert" style={{ margin: '8px 0', border: '1px solid #0284c7', background: 'rgba(2, 132, 199, 0.1)' }}>
+                  <Info size={12} color="#38bdf8" />
+                  <span style={{ color: '#bae6fd' }}>{activeRoute.evaluation_limitation}</span>
+                </div>
+              )}
 
               {/* Embedded Route Visualization Map */}
               <div className="embedded-route-map">

@@ -39,6 +39,9 @@ class OceanAgent:
         ocean_obj = OceanData(
             source=raw_data["source"],
             location=raw_data["location"],
+            forecast_time=raw_data.get("forecast_time"),
+            forecast_timestamp=raw_data.get("forecast_timestamp"),
+            retrieved_at=raw_data.get("retrieved_at"),
             sst_c=raw_data["sst_c"],
             wave_height_m=raw_data["wave_height_m"],
             sea_state=raw_data["sea_state"],
@@ -52,6 +55,8 @@ class OceanAgent:
             sea_level_height_m=raw_data.get("sea_level_height_m"),
             tide_note=raw_data.get("tide_note"),
             is_mock=raw_data.get("is_mock", True),
+            is_fallback=raw_data.get("is_fallback", False),
+            units=raw_data.get("units"),
             raw_metadata=raw_data.get("raw_metadata")
         )
 

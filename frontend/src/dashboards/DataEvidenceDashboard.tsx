@@ -28,6 +28,7 @@ import {
 
 interface DataEvidenceDashboardProps {
   latestResponse: ChatResponse | null;
+  hasQueried?: boolean;
 }
 
 const AGENT_PIPELINE_ORDER = [
@@ -39,7 +40,7 @@ const AGENT_PIPELINE_ORDER = [
   'EvidenceAgent',
 ];
 
-export const DataEvidenceDashboard: React.FC<DataEvidenceDashboardProps> = ({ latestResponse }) => {
+export const DataEvidenceDashboard: React.FC<DataEvidenceDashboardProps> = ({ latestResponse, hasQueried = false }) => {
   const [selectedAgent, setSelectedAgent] = useState<string>('PlannerAgent');
 
   const weather = latestResponse?.weather;
@@ -49,11 +50,11 @@ export const DataEvidenceDashboard: React.FC<DataEvidenceDashboardProps> = ({ la
   const evidence = latestResponse?.evidence || [];
   const context = latestResponse?.context || null;
 
-  const weatherStatus: DataSourceStatus = deriveWeatherStatus(weather);
-  const oceanStatus: DataSourceStatus = deriveOceanStatus(ocean);
-  const gisStatus: DataSourceStatus = deriveGisStatus(geospatial);
-  const lightningStatus: DataSourceStatus = deriveLightningStatus(weather);
-  const chlorophyllStatus: DataSourceStatus = deriveChlorophyllStatus(ocean);
+  const weatherStatus: DataSourceStatus = deriveWeatherStatus(weather, hasQueried);
+  const oceanStatus: DataSourceStatus = deriveOceanStatus(ocean, hasQueried);
+  const gisStatus: DataSourceStatus = deriveGisStatus(geospatial, hasQueried);
+  const lightningStatus: DataSourceStatus = deriveLightningStatus(weather, hasQueried);
+  const chlorophyllStatus: DataSourceStatus = deriveChlorophyllStatus(ocean, hasQueried);
 
   const sources = [
     {
@@ -61,11 +62,22 @@ export const DataEvidenceDashboard: React.FC<DataEvidenceDashboardProps> = ({ la
       label: 'Atmospheric Weather',
       icon: <CloudSun size={15} />,
       status: weatherStatus,
+      source: weatherStatus === 'READY'
+        ? 'Awaiting query'
+        : weatherStatus === 'MOCK FALLBACK'
+        ? 'Mock Fallback'
+        : 'Open-Meteo Weather API',
       endpoint: 'Open-Meteo Weather API v1',
       parameters: 'wind_speed_10m, precipitation_probability, weather_code, temperature_2m',
-      detail: weather?.retrieved_at
-        ? `${weather.source || 'Open-Meteo'} (Retrieved: ${new Date(weather.retrieved_at).toLocaleTimeString()})`
-        : weather?.source || (weatherStatus === 'LIVE' ? 'Open-Meteo Live' : 'Demonstration Mock'),
+      detail: weatherStatus === 'READY'
+        ? 'Awaiting query'
+        : weather?.retrieved_at
+        ? `Open-Meteo Weather API (Retrieved: ${new Date(weather.retrieved_at).toLocaleTimeString()})`
+        : weatherStatus === 'LIVE'
+        ? 'Open-Meteo Weather API'
+        : weatherStatus === 'MOCK FALLBACK'
+        ? 'Mock Fallback (Open-Meteo Weather unavailable)'
+        : 'Not queried or unavailable for this turn',
       coverage: 'Global / Kochi Coordinates (9.9312° N, 76.2673° E)',
     },
     {
@@ -73,11 +85,22 @@ export const DataEvidenceDashboard: React.FC<DataEvidenceDashboardProps> = ({ la
       label: 'Oceanographic & Marine',
       icon: <Waves size={15} />,
       status: oceanStatus,
+      source: oceanStatus === 'READY'
+        ? 'Awaiting query'
+        : oceanStatus === 'MOCK FALLBACK'
+        ? 'Mock Fallback'
+        : 'Open-Meteo Marine API',
       endpoint: 'Open-Meteo Marine API v1',
       parameters: 'wave_height, wave_direction, wave_period, ocean_current_velocity, sea_surface_temperature',
-      detail: ocean?.retrieved_at
-        ? `${ocean.source || 'Open-Meteo Marine'} (Retrieved: ${new Date(ocean.retrieved_at).toLocaleTimeString()})`
-        : ocean?.source || (oceanStatus === 'LIVE' ? 'Open-Meteo Marine Live' : 'Demonstration Mock'),
+      detail: oceanStatus === 'READY'
+        ? 'Awaiting query'
+        : ocean?.retrieved_at
+        ? `Open-Meteo Marine API (Retrieved: ${new Date(ocean.retrieved_at).toLocaleTimeString()})`
+        : oceanStatus === 'LIVE'
+        ? 'Open-Meteo Marine API'
+        : oceanStatus === 'MOCK FALLBACK'
+        ? 'Mock Fallback (Open-Meteo Marine unavailable)'
+        : 'Not queried or unavailable for this turn',
       coverage: 'Arabian Sea Offshore Grid',
     },
     {
@@ -85,11 +108,22 @@ export const DataEvidenceDashboard: React.FC<DataEvidenceDashboardProps> = ({ la
       label: 'PFZ / Geospatial Snapshots',
       icon: <MapPin size={15} />,
       status: gisStatus,
+      source: gisStatus === 'READY'
+        ? 'Awaiting query'
+        : gisStatus === 'MOCK FALLBACK'
+        ? 'Mock Fallback'
+        : 'INCOIS historical snapshot',
       endpoint: 'ESSO-INCOIS Advisory Archive',
       parameters: 'pfz_id, landing_centre, distance_km, bearing_deg, water_depth, direction',
-      detail: gisStatus === 'OFFICIAL SNAPSHOT'
-        ? `INCOIS Official Snapshot (${geospatial?.advisory_date?.split('T')[0] || 'Historical'})`
-        : 'INCOIS Simulated GIS',
+      detail: gisStatus === 'READY'
+        ? 'Awaiting query'
+        : gisStatus === 'OFFICIAL SNAPSHOT'
+        ? (geospatial?.advisory_date
+          ? `INCOIS historical snapshot (${geospatial.advisory_date.split('T')[0]})`
+          : 'INCOIS historical snapshot')
+        : gisStatus === 'MOCK FALLBACK'
+        ? 'Mock Fallback'
+        : 'INCOIS historical snapshot',
       coverage: 'Kerala Coastal Sector (Ernakulam / Kochi District)',
     },
     {
@@ -97,9 +131,14 @@ export const DataEvidenceDashboard: React.FC<DataEvidenceDashboardProps> = ({ la
       label: 'Lightning Strike Risk',
       icon: <Zap size={15} />,
       status: lightningStatus,
-      endpoint: 'N/A (Simulated telemetry field)',
-      parameters: 'Derived or unsupported in free tier',
-      detail: 'Unsupported by upstream free API; simulated fallback if enabled',
+      source: lightningStatus === 'READY'
+        ? 'Awaiting query'
+        : 'Unsupported by current upstream source',
+      endpoint: 'Unsupported upstream telemetry field',
+      parameters: 'Not provided in Open-Meteo free tier',
+      detail: lightningStatus === 'READY'
+        ? 'Awaiting query'
+        : 'Unsupported by current upstream source',
       coverage: 'Coastal sector',
     },
     {
@@ -107,9 +146,14 @@ export const DataEvidenceDashboard: React.FC<DataEvidenceDashboardProps> = ({ la
       label: 'Chlorophyll-a Biomass',
       icon: <Droplets size={15} />,
       status: chlorophyllStatus,
+      source: chlorophyllStatus === 'READY'
+        ? 'Awaiting query'
+        : 'Not available from current live feed',
       endpoint: 'N/A (Ocean color sensor)',
       parameters: 'Remote sensing chlorophyll concentration',
-      detail: 'Not provided in live open forecast feed; historical INCOIS model estimate',
+      detail: chlorophyllStatus === 'READY'
+        ? 'Awaiting query'
+        : 'Not available from current live feed',
       coverage: 'Offshore',
     },
   ];
@@ -186,6 +230,10 @@ export const DataEvidenceDashboard: React.FC<DataEvidenceDashboardProps> = ({ la
                   </span>
                 </div>
                 <div className="source-card-body">
+                  <div className="source-detail-row">
+                    <span className="detail-key">Source:</span>
+                    <span className="detail-val font-medium">{s.source}</span>
+                  </div>
                   <div className="source-detail-row">
                     <span className="detail-key">Endpoint:</span>
                     <span className="detail-val font-mono">{s.endpoint}</span>
