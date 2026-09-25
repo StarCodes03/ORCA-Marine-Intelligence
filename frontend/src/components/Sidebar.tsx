@@ -1,5 +1,6 @@
 import React from 'react';
 import { MessageSquare, Map, Navigation, Database, Compass, ShieldCheck } from 'lucide-react';
+import type { RoleConfig } from '../config/roles';
 
 export type DashboardRoute = '/chat' | '/marine' | '/route' | '/evidence';
 
@@ -7,6 +8,8 @@ interface SidebarProps {
   activeRoute: DashboardRoute;
   onNavigate: (route: DashboardRoute) => void;
   systemHealthy: boolean;
+  activeRole?: RoleConfig;
+  onSwitchRole?: () => void;
 }
 
 interface NavItem {
@@ -21,6 +24,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   activeRoute,
   onNavigate,
   systemHealthy,
+  activeRole,
+  onSwitchRole,
 }) => {
   const navItems: NavItem[] = [
     {
@@ -86,6 +91,31 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Sidebar Footer Status */}
       <div className="sidebar-footer">
+        {activeRole && onSwitchRole && (
+          <div
+            className="sidebar-role-card"
+            onClick={onSwitchRole}
+            role="button"
+            tabIndex={0}
+            title={`Active Persona: ${activeRole.displayName}. Click to switch role.`}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                onSwitchRole();
+              }
+            }}
+          >
+            <div className="sidebar-role-main">
+              <span className="sidebar-role-icon">{activeRole.icon}</span>
+              <div className="sidebar-role-info">
+                <span className="sidebar-role-label">ACTIVE ROLE</span>
+                <span className="sidebar-role-name">{activeRole.displayName}</span>
+              </div>
+            </div>
+            <span className="sidebar-role-switch-hint">Switch &rarr;</span>
+          </div>
+        )}
+
         <div className="sidebar-status-box">
           <div className="sidebar-status-row">
             <span className={`status-dot ${systemHealthy ? 'live' : 'offline'}`} />

@@ -25,10 +25,15 @@ import {
   type ChatResponse,
   type DataSourceStatus,
 } from '../services/api';
+import type { RoleConfig } from '../config/roles';
+import { RoleBanner } from '../components/RoleBanner';
 
 interface DataEvidenceDashboardProps {
   latestResponse: ChatResponse | null;
   hasQueried?: boolean;
+  activeRole?: RoleConfig;
+  onSwitchRole?: () => void;
+  onSelectPrompt?: (prompt: string) => void;
 }
 
 const AGENT_PIPELINE_ORDER = [
@@ -40,7 +45,13 @@ const AGENT_PIPELINE_ORDER = [
   'EvidenceAgent',
 ];
 
-export const DataEvidenceDashboard: React.FC<DataEvidenceDashboardProps> = ({ latestResponse, hasQueried = false }) => {
+export const DataEvidenceDashboard: React.FC<DataEvidenceDashboardProps> = ({
+  latestResponse,
+  hasQueried = false,
+  activeRole,
+  onSwitchRole,
+  onSelectPrompt,
+}) => {
   const [selectedAgent, setSelectedAgent] = useState<string>('PlannerAgent');
 
   const weather = latestResponse?.weather;
@@ -203,18 +214,33 @@ export const DataEvidenceDashboard: React.FC<DataEvidenceDashboardProps> = ({ la
           <Database size={17} color="#06b6d4" />
           <span>DATA PROVENANCE & EVIDENCE AUDIT</span>
           <span className="workspace-header-badge">TECHNICAL TRANSPARENCY</span>
+          {activeRole && (
+            <span className="workspace-header-badge role-badge">
+              {activeRole.icon} {activeRole.displayName}
+            </span>
+          )}
         </div>
         <div className="workspace-header-meta">
           <span>Judge-Facing Audit • Deterministic Reasoning Transparency</span>
         </div>
       </div>
 
+      {/* Role Priority Banner */}
+      {activeRole && onSwitchRole && (
+        <RoleBanner
+          activeRole={activeRole}
+          onSwitchRole={onSwitchRole}
+          onSelectPrompt={onSelectPrompt}
+          compact={true}
+        />
+      )}
+
       <div className="evidence-dashboard-scrollable">
         {/* SECTION 1: DATA SOURCES & PROVENANCE GRID */}
         <section className="evidence-section">
           <div className="evidence-section-header">
             <Layers size={15} color="#38bdf8" />
-            <h3>1. TELEMETRY DATA PROVENANCE & FEED STATUS</h3>
+            <h3>1. DATA PROVENANCE & FEED STATUS</h3>
           </div>
           <div className="sources-detailed-grid">
             {sources.map((s) => (
@@ -239,7 +265,7 @@ export const DataEvidenceDashboard: React.FC<DataEvidenceDashboardProps> = ({ la
                     <span className="detail-val font-mono">{s.endpoint}</span>
                   </div>
                   <div className="source-detail-row">
-                    <span className="detail-key">Telemetry:</span>
+                    <span className="detail-key">Parameters:</span>
                     <span className="detail-val">{s.parameters}</span>
                   </div>
                   <div className="source-detail-row">

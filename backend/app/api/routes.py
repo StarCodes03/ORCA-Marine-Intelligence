@@ -207,6 +207,11 @@ def handle_chat(request: ChatRequest):
             detected_alerts = []
             if intent in ["conversational_greeting", "unsupported"]:
                 location = None
+        elif intent == "marine_update":
+            spatial_features = None
+            detected_alerts = []
+            geospatial = None
+            transit_route = None
         else:
             # Spatial features bundle for instant map visualization
             spatial_features = {

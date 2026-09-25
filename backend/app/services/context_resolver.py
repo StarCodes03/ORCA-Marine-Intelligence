@@ -138,6 +138,7 @@ class ContextResolver:
 
     VALID_MARINE_INTENTS = {
         "marine_safety",
+        "marine_update",
         "weather_query",
         "ocean_query",
         "pfz_search",
@@ -151,44 +152,83 @@ class ContextResolver:
         "temporal_comparison",
     }
 
-    NEWS_PATTERNS = [
+    GENUINE_NEWS_PATTERNS = [
         # Explicit marine news phrases
         r"\b(?:marine|sea|ocean|coastal|maritime|fishing|port)\s+news\b",
         r"\bnews\s+(?:about|on|in|at|from|of)\s+(?:the\s+)?(?:sea|ocean|marine|coast|coastal|waters?|fisheries|kerala)\b",
         r"\b(?:what\s+is\s+new|what's\s+new)\s+in\s+(?:the\s+)?(?:sea|marine|ocean|coast|water)?\s*news\b",
-        r"\b(?:what\s+is\s+new|what's\s+new)\s+in\s+(?:the\s+)?(?:sea|marine|ocean|coast)\b",
         r"\b(?:any|latest|recent|today(?:'s)?|daily|breaking)\s+(?:.*?\b)?(?:marine|sea|ocean|coastal|maritime)\s+news\b",
         r"\b(?:any|latest|recent|today(?:'s)?)\s+news\s+(?:today|now)?\b",
         r"\bnews\s+today\b",
-        # Event / occurrence inquiries at sea
+        # Event / incident / accident inquiries at sea
         r"\bwhat\s+(?:has\s+)?happened\s+(?:in|at|on)\s+(?:the\s+)?(?:sea|ocean|coast|water)\b",
-        r"\bwhat(?:'s|\s+is)\s+happening\s+(?:in|at|on)\s+(?:the\s+)?(?:sea|ocean|coast|water)\b",
-        r"\bwhat(?:'s|\s+is)\s+going\s+on\s+(?:in|at|on)\s+(?:the\s+)?(?:sea|ocean|coast|water)\b",
-        r"\b(?:any|latest)\s+(?:incidents?|accidents?|events?|headlines?|stories|articles?|updates?)\s+(?:at|in|on)\s+(?:the\s+)?(?:sea|ocean)\b",
+        r"\b(?:any|latest)\s+(?:incidents?|accidents?|events?|headlines?|stories|articles?)\s+(?:at|in|on)\s+(?:the\s+)?(?:sea|ocean)\b",
+        r"\b(?:ship|boat|vessel)\s+(?:accident|crash|collision|incident|sink|sinking|casualty|casualties)\b",
         r"\b(?:വാർത്തകൾ|വാർത്ത)\b",
     ]
 
+    MARINE_UPDATE_PATTERNS = [
+        # General sea/ocean condition inquiries (what's new in the sea, what's happening at sea, updates)
+        r"\b(?:what\s+is\s+new|what's\s+new)\s+(?:with|in|at|on)\s+(?:the\s+)?(?:sea|ocean|coast|water)\b",
+        r"\bwhat(?:'s|\s+is)\s+happening\s+(?:in|at|on|out\s+at)\s+(?:the\s+)?(?:sea|ocean|coast|water)\b",
+        r"\bwhat(?:'s|\s+is)\s+going\s+on\s+(?:in|at|on|out\s+at)\s+(?:the\s+)?(?:sea|ocean|coast|water)\b",
+        r"\b(?:tell\s+me\s+)?what(?:'s|\s+is)\s+happening\s+(?:out\s+at|at|in)\s+sea\b",
+        r"\bany\s+updates?\s+(?:from|on|at|in)\s+(?:the\s+)?(?:sea|ocean)\b",
+        r"\b(?:what\s+is|what's)\s+(?:the\s+)?update\s+on\s+(?:the\s+)?(?:sea|ocean)\b",
+        r"\b(?:sea|ocean)\s+updates?\s*(?:today|now)?\b",
+        r"\b(?:how\s+is|how's)\s+(?:the\s+)?(?:sea|ocean)\s+(?:today|looking|now|doing)\b",
+    ]
+
     @classmethod
-    def is_marine_news_query(cls, text: str) -> bool:
-        """Deterministically detect marine news, current events, or incident inquiries."""
+    def is_genuine_marine_news_query(cls, text: str) -> bool:
+        """Deterministically detect genuine marine news, breaking headlines, or maritime incidents."""
         t = text.lower().strip()
         words = set(re.findall(r"\b[\w'-]+\b", t))
 
         # Direct pattern match
-        if any(bool(re.search(p, t)) for p in cls.NEWS_PATTERNS):
+        if any(bool(re.search(p, t)) for p in cls.GENUINE_NEWS_PATTERNS):
             return True
 
         # Semantic keywords combination: asking for news/headlines in marine context
-        has_news_word = bool(words & {"news", "headline", "headlines", "incident", "incidents", "accident", "accidents", "വാർത്ത", "വാർത്തകൾ"})
-        has_marine_context = bool(words & {"sea", "marine", "ocean", "maritime", "coastal", "coast", "water", "waters", "offshore"})
+        has_news_word = bool(words & {
+            "news", "headline", "headlines", "incident", "incidents", "accident", "accidents",
+            "casualty", "casualties", "shipwreck", "piracy", "വാർത്ത", "വാർത്തകൾ"
+        })
+        has_marine_context = bool(words & {
+            "sea", "marine", "ocean", "maritime", "coastal", "coast", "water", "waters", "offshore",
+            "ship", "boat", "vessel", "fisheries", "port", "harbor", "harbour"
+        })
 
         if has_news_word and (has_marine_context or "news" in words):
             return True
 
-        # "what happened" / "what is happening" combined with marine words
-        if re.search(r"\bwhat\s+(?:has\s+)?happened\b", t) or re.search(r"\bwhat(?:'s|\s+is)\s+happening\b", t) or re.search(r"\bwhat(?:'s|\s+is)\s+going\s+on\b", t):
+        # "what happened" combined with marine words
+        if re.search(r"\bwhat\s+(?:has\s+)?happened\b", t):
             if has_marine_context or "sea" in words or "ocean" in words:
                 return True
+
+        return False
+
+    @classmethod
+    def is_marine_news_query(cls, text: str) -> bool:
+        """Backward-compatible alias for is_genuine_marine_news_query."""
+        return cls.is_genuine_marine_news_query(text)
+
+    @classmethod
+    def is_marine_update_query(cls, text: str) -> bool:
+        """Deterministically detect general sea/ocean condition inquiries."""
+        if cls.is_genuine_marine_news_query(text):
+            return False
+
+        t = text.lower().strip()
+        words = set(re.findall(r"\b[\w'-]+\b", t))
+
+        if any(bool(re.search(p, t)) for p in cls.MARINE_UPDATE_PATTERNS):
+            return True
+
+        # Semantic combination: "update" or "updates" in sea/ocean context
+        if bool(words & {"update", "updates"}) and bool(words & {"sea", "ocean", "marine", "coast", "coastal", "water", "waters"}):
+            return True
 
         return False
 
@@ -206,9 +246,13 @@ class ContextResolver:
         Evaluates explicit coordinates, known coastal geography, marine terminology,
         and multi-turn referents when prior marine context exists.
         """
-        # Marine news / current events inquiries are outside supported operational marine intelligence
-        if cls.is_marine_news_query(text):
+        # Genuine marine news / incident inquiries are outside supported operational marine intelligence
+        if cls.is_genuine_marine_news_query(text):
             return False
+
+        # Marine condition update inquiries ARE supported marine intelligence
+        if cls.is_marine_update_query(text):
+            return True
 
         text_lower = text.lower().strip()
         words = set(re.findall(r"\b[\w'-]+\b", text_lower))
@@ -757,6 +801,16 @@ class ContextResolver:
             if location is None:
                 location = LocationCoords(name="Kochi", latitude=9.9312, longitude=76.2673)
 
+        # Scenario 0e: Marine Condition Update Query ("what is new in the sea today", "what's happening in the sea today", etc.)
+        elif cls.is_marine_update_query(text):
+            intent = "marine_update"
+            required_agents = ["weather", "ocean"]
+            activity = activity or p_act or "general_marine"
+            if location is None:
+                location = p_loc or LocationCoords(name="Kochi", latitude=9.9312, longitude=76.2673)
+            if not time_range:
+                time_range = "current"
+
         # Scenario 1: Referent distance query ("How far is it?", "How far is the second one?")
         elif is_referent_distance_query and not any(k in text_lower for k in KNOWN_LOCATIONS):
             ord_idx = cls.extract_ordinal_index(text_lower)
@@ -977,11 +1031,15 @@ class ContextResolver:
             else:
                 intent = "weather_query"
                 required_agents = ["weather"]
+            if location is None:
+                location = p_loc or LocationCoords(name="Kochi", latitude=9.9312, longitude=76.2673)
 
         # Scenario 7: Ocean Query
         elif any(w in text_lower for w in ["tide", "wave", "sea state", "sea condition", "swell", "sst"]):
             intent = "ocean_query"
             required_agents = ["ocean"]
+            if location is None:
+                location = p_loc or LocationCoords(name="Kochi", latitude=9.9312, longitude=76.2673)
 
         # Default fallback
         else:

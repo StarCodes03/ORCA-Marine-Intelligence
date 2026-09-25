@@ -1,6 +1,7 @@
 import React from 'react';
 import { ChatPanel } from '../components/ChatPanel';
 import type { ChatResponse, NearestPFZ } from '../services/api';
+import type { RoleConfig } from '../config/roles';
 
 interface Message {
   id: string;
@@ -23,6 +24,8 @@ interface ChatDashboardProps {
   onLanguageChange?: (lang: string) => void;
   onNavigateToMarine?: () => void;
   onNavigateToRoute?: () => void;
+  activeRole?: RoleConfig;
+  onSwitchRole?: () => void;
 }
 
 export const ChatDashboard: React.FC<ChatDashboardProps> = ({
@@ -38,6 +41,8 @@ export const ChatDashboard: React.FC<ChatDashboardProps> = ({
   onLanguageChange,
   onNavigateToMarine,
   onNavigateToRoute,
+  activeRole,
+  onSwitchRole,
 }) => {
   const handleSelectPfz = (pfz: NearestPFZ) => {
     if (onSelectPfz) onSelectPfz(pfz);
@@ -60,6 +65,8 @@ export const ChatDashboard: React.FC<ChatDashboardProps> = ({
           onLanguageChange={onLanguageChange}
           onNavigateToMarine={onNavigateToMarine}
           onNavigateToRoute={onNavigateToRoute}
+          activeRole={activeRole}
+          onSwitchRole={onSwitchRole}
         />
       </div>
     </div>

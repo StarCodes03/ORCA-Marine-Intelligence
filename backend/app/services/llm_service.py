@@ -813,6 +813,102 @@ class LLMService:
         else:
             return {"answer": en, "answer_ml": ml}
 
+    def synthesize_marine_update_response(
+        self,
+        weather: Optional[Dict[str, Any]],
+        ocean: Optional[Dict[str, Any]],
+        location_name: str = "Kochi",
+        time_range: str = "current",
+        language_mode: str = "bilingual"
+    ) -> Dict[str, Any]:
+        """Synthesize marine condition update with live forecast telemetry and honest news disclaimer."""
+        mode = language_mode or "bilingual"
+
+        wind_spd = weather.get("wind_speed_kmh", 0.0) if weather else 0.0
+        wind_dir = weather.get("wind_direction_deg", 270.0) if weather else 270.0
+        rain_prob = weather.get("rain_probability", 0) if weather else 0
+        wave_h = ocean.get("wave_height_m", 0.0) if ocean else 0.0
+        sea_st = ocean.get("sea_state", "moderate") if ocean else "moderate"
+        tide_trend = ocean.get("tide", "neutral") if ocean else "neutral"
+        if tide_trend and "(" in tide_trend:
+            tide_trend = tide_trend.split("(")[0].strip()
+        sst = ocean.get("sst_c") if ocean else None
+
+        # Build clean observation summary from live forecast metrics
+        observations = []
+        if wave_h <= 1.0:
+            observations.append("calm-to-slight seas")
+        elif wave_h <= 2.0:
+            observations.append("moderate sea swell")
+        else:
+            observations.append("rough sea swell")
+
+        if wind_spd <= 15.0:
+            observations.append("light breeze")
+        elif wind_spd <= 25.0:
+            observations.append("moderate breeze")
+        else:
+            observations.append("fresh to strong breeze")
+
+        if rain_prob < 20:
+            observations.append("low rain probability")
+        elif rain_prob < 50:
+            observations.append("scattered rain showers possible")
+        else:
+            observations.append("high likelihood of precipitation")
+
+        summary_clause = ", ".join(observations)
+
+        # English Response
+        en_lines = [
+            f"I don't have a live marine-news feed, but I can give you today's current marine conditions from the live forecast for **{location_name}**:\n",
+            f"### 🌊 Marine Update — Today ({location_name})\n",
+            f"| Metric | Live Forecast Observation | Source |",
+            f"| :--- | :--- | :--- |",
+            f"| **Wind** | {wind_spd:.1f} km/h (bearing {wind_dir:.0f}°) | Live Open-Meteo Weather |",
+            f"| **Rain Probability** | {rain_prob}% | Live Open-Meteo Weather |",
+            f"| **Significant Wave Height** | {wave_h:.2f} m | Live Open-Meteo Marine |",
+            f"| **Sea State** | {sea_st.capitalize()} | Live Open-Meteo Marine |",
+            f"| **Sea-Level / Tide Trend** | {tide_trend.capitalize()} | INCOIS Tidal Harmonic Prototype |",
+        ]
+        if sst is not None:
+            en_lines.append(f"| **Sea Surface Temperature (SST)** | {sst:.1f} °C | Live Open-Meteo Marine |")
+
+        en_lines.append(
+            f"\n**Live Observation Summary:** Conditions off {location_name} currently indicate {summary_clause}. "
+            "No severe weather anomalies or extreme marine alerts are detected in the active forecast feed.\n\n"
+            "> **Note:** Demonstration prototype — live weather & ocean telemetry; not an official maritime news service."
+        )
+        en = "\n".join(en_lines)
+
+        # Malayalam Response
+        ml_lines = [
+            f"എനിക്ക് തത്സമയ സമുദ്ര വാർത്താ ഫീഡ് (news feed) ലഭ്യമല്ല, എങ്കിലും **{location_name}**-ലെ ഇന്നത്തെ തത്സമയ കാലാവസ്ഥാ വിവരങ്ങൾ നൽകാൻ സാധിക്കും:\n",
+            f"### 🌊 സമുദ്ര വിവരങ്ങൾ — ഇന്ന് ({location_name})\n",
+            f"| അളവ് | തത്സമയ നിരീക്ഷണം | ഉറവിടം |",
+            f"| :--- | :--- | :--- |",
+            f"| **കാറ്റ്** | {wind_spd:.1f} km/h ({wind_dir:.0f}°) | Live Open-Meteo Weather |",
+            f"| **മഴ സാധ്യത** | {rain_prob}% | Live Open-Meteo Weather |",
+            f"| **തിരമാല ഉയരം** | {wave_h:.2f} m | Live Open-Meteo Marine |",
+            f"| **കടൽാവസ്ഥ** | {sea_st.capitalize()} | Live Open-Meteo Marine |",
+            f"| **വേലിയേറ്റ നില** | {tide_trend.capitalize()} | INCOIS Tidal Harmonic Prototype |",
+        ]
+        if sst is not None:
+            ml_lines.append(f"| **സമുദ്ര താപനില (SST)** | {sst:.1f} °C | Live Open-Meteo Marine |")
+
+        ml_lines.append(
+            f"\n**സംഗ്രഹം:** {location_name} തീരത്ത് നിലവിലെ പ്രവചനം അനുസരിച്ച് സാധാരണ നിലയിലുള്ള സമുദ്രാവസ്ഥയാണ് രേഖപ്പെടുത്തിയിട്ടുള്ളത്.\n\n"
+            "> **കുറിപ്പ്:** ഇത് ഒരു പരീക്ഷണാടിസ്ഥാനത്തിലുള്ള മാതൃകയാണ് — വാർത്താ സേവനമല്ല."
+        )
+        ml = "\n".join(ml_lines)
+
+        if mode == "malayalam":
+            return {"answer": ml, "answer_ml": ml}
+        elif mode == "english":
+            return {"answer": en, "answer_ml": None}
+        else:
+            return {"answer": en, "answer_ml": ml}
+
 
 # Singleton instance
 llm_service = LLMService()

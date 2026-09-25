@@ -412,15 +412,17 @@ def evidence_node(state: OrcaState) -> OrcaState:
     context_obj = ConversationContext(**ctx_dict) if ctx_dict else None
 
     geo_obj = (
-        GeospatialData(**state["geospatial_data"]) if state.get("geospatial_data")
+        None if plan_obj.intent == "marine_update"
+        else (GeospatialData(**state["geospatial_data"]) if state.get("geospatial_data")
         else (context_obj.geospatial_data if context_obj and context_obj.geospatial_data
-        else (GeospatialData(**ctx_dict["geospatial_data"]) if ctx_dict and ctx_dict.get("geospatial_data") else None))
+        else (GeospatialData(**ctx_dict["geospatial_data"]) if ctx_dict and ctx_dict.get("geospatial_data") else None)))
     )
     risk_obj = RiskAssessment(**state["risk_assessment"]) if state.get("risk_assessment") else None
     route_obj = (
-        TransitRoute(**state["transit_route"]) if state.get("transit_route")
+        None if plan_obj.intent == "marine_update"
+        else (TransitRoute(**state["transit_route"]) if state.get("transit_route")
         else (context_obj.active_route if context_obj and context_obj.active_route
-        else (TransitRoute(**ctx_dict["active_route"]) if ctx_dict and ctx_dict.get("active_route") else None))
+        else (TransitRoute(**ctx_dict["active_route"]) if ctx_dict and ctx_dict.get("active_route") else None)))
     )
 
     # M5 models
@@ -525,6 +527,9 @@ def route_from_ocean(state: OrcaState) -> str:
     plan = state.get("planner_plan", {})
     req = plan.get("required_agents", [])
     intent = plan.get("intent", "marine_safety")
+
+    if intent == "marine_update":
+        return "evidence_node"
 
     if "geospatial" in req:
         return "geospatial_node"

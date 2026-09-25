@@ -86,6 +86,45 @@ class EvidenceAgent:
                 "evidence": []
             }
 
+        # Handle marine condition update queries ("what is new in the sea today", "what's happening in the sea today")
+        if planner_plan.intent == "marine_update":
+            lang_mode = planner_plan.language_mode or (context.language_mode if context else "bilingual")
+            loc_name = (
+                planner_plan.location.name
+                if planner_plan.location
+                else (context.location.name if context and context.location else "Kochi")
+            )
+            time_str = planner_plan.time_range or "today"
+
+            res = self.llm.synthesize_marine_update_response(
+                weather=weather.model_dump() if weather else None,
+                ocean=ocean.model_dump() if ocean else None,
+                location_name=loc_name,
+                time_range=time_str,
+                language_mode=lang_mode
+            )
+
+            if weather:
+                evidence_items.append(EvidenceItem(
+                    category="observed",
+                    claim=f"Live weather telemetry for {loc_name}: Wind {weather.wind_speed_kmh} km/h, Rain {weather.rain_probability}%",
+                    source=weather.source,
+                    raw_data=weather.model_dump()
+                ))
+            if ocean:
+                evidence_items.append(EvidenceItem(
+                    category="observed",
+                    claim=f"Live ocean telemetry for {loc_name}: Waves {ocean.wave_height_m} m, Sea state {ocean.sea_state}, SST {ocean.sst_c}°C",
+                    source=ocean.source,
+                    raw_data=ocean.model_dump()
+                ))
+
+            return {
+                "answer": res["answer"],
+                "answer_ml": res.get("answer_ml"),
+                "evidence": evidence_items
+            }
+
         # Handle early clarification needed
         if planner_plan.intent == "clarification_needed":
             reason = planner_plan.clarification_reason or "missing_information"

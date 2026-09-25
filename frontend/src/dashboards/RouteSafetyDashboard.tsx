@@ -18,6 +18,8 @@ import {
   type ChatResponse,
   CANONICAL_VESSEL_PROFILES
 } from '../services/api';
+import type { RoleConfig } from '../config/roles';
+import { RoleBanner } from '../components/RoleBanner';
 
 interface RouteSafetyDashboardProps {
   vesselLocation: LocationCoords;
@@ -28,6 +30,9 @@ interface RouteSafetyDashboardProps {
   onVesselChange: (vessel: string) => void;
   onNavigateToChat?: () => void;
   onSelectPfz?: (pfz: NearestPFZ) => void;
+  activeRole?: RoleConfig;
+  onSwitchRole?: () => void;
+  onSelectPrompt?: (prompt: string) => void;
 }
 
 export const RouteSafetyDashboard: React.FC<RouteSafetyDashboardProps> = ({
@@ -39,6 +44,9 @@ export const RouteSafetyDashboard: React.FC<RouteSafetyDashboardProps> = ({
   onVesselChange,
   onNavigateToChat,
   onSelectPfz,
+  activeRole,
+  onSwitchRole,
+  onSelectPrompt,
 }) => {
   const canonical = CANONICAL_VESSEL_PROFILES[selectedVessel] || CANONICAL_VESSEL_PROFILES['motorized_frp_obm'];
   const profile = (latestResponse?.vessel_profile && latestResponse.vessel_profile.vessel_type === selectedVessel)
@@ -58,13 +66,28 @@ export const RouteSafetyDashboard: React.FC<RouteSafetyDashboardProps> = ({
       <div className="workspace-header">
         <div className="workspace-header-title">
           <Navigation size={17} color="#06b6d4" />
-          <span>ROUTE & SAFETY INTELLIGENCE</span>
+          <span>{activeRole?.terminology.routeLabel || 'ROUTE & SAFETY INTELLIGENCE'}</span>
           <span className="workspace-header-badge">PASSAGE PLANNING</span>
+          {activeRole && (
+            <span className="workspace-header-badge role-badge">
+              {activeRole.icon} {activeRole.displayName}
+            </span>
+          )}
         </div>
         <div className="workspace-header-meta">
           <span>Configurable 1.5 km Buffer Corridor • Prototype Decision Support</span>
         </div>
       </div>
+
+      {/* Role Priority Banner */}
+      {activeRole && onSwitchRole && (
+        <RoleBanner
+          activeRole={activeRole}
+          onSwitchRole={onSwitchRole}
+          onSelectPrompt={onSelectPrompt}
+          compact={true}
+        />
+      )}
 
       {/* Main Split Layout */}
       <div className="route-dashboard-grid">

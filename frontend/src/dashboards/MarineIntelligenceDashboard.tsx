@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { Layers, Sliders, MapPin, Compass, Navigation, Info } from 'lucide-react';
 import { MarineMap } from '../map/MarineMap';
 import type { LocationCoords, NearestPFZ, TransitRoute } from '../services/api';
+import type { RoleConfig } from '../config/roles';
+import { RoleBanner } from '../components/RoleBanner';
 
 interface MarineIntelligenceDashboardProps {
   vesselLocation: LocationCoords;
@@ -10,6 +12,9 @@ interface MarineIntelligenceDashboardProps {
   transitRoute?: TransitRoute | null;
   onSelectPfz: (pfz: NearestPFZ) => void;
   onNavigateToRoute?: () => void;
+  activeRole?: RoleConfig;
+  onSwitchRole?: () => void;
+  onSelectPrompt?: (prompt: string) => void;
 }
 
 const RADIUS_OPTIONS = [
@@ -27,11 +32,14 @@ export const MarineIntelligenceDashboard: React.FC<MarineIntelligenceDashboardPr
   transitRoute,
   onSelectPfz,
   onNavigateToRoute,
+  activeRole,
+  onSwitchRole,
+  onSelectPrompt,
 }) => {
-  const [showPfz, setShowPfz] = useState<boolean>(true);
-  const [showRestricted, setShowRestricted] = useState<boolean>(true);
-  const [showVessel, setShowVessel] = useState<boolean>(true);
-  const [showRoute, setShowRoute] = useState<boolean>(true);
+  const [showPfz, setShowPfz] = useState<boolean>(() => activeRole ? activeRole.mapEmphasis.showPfz : true);
+  const [showRestricted, setShowRestricted] = useState<boolean>(() => activeRole ? activeRole.mapEmphasis.showRestricted : true);
+  const [showVessel, setShowVessel] = useState<boolean>(() => activeRole ? activeRole.mapEmphasis.showVessel : true);
+  const [showRoute, setShowRoute] = useState<boolean>(() => activeRole ? activeRole.mapEmphasis.showRoute : true);
   const [showAlternatives, setShowAlternatives] = useState<boolean>(true);
   const [selectedRadius, setSelectedRadius] = useState<number | null>(null);
   const [isLayerPanelOpen, setIsLayerPanelOpen] = useState<boolean>(true);
@@ -47,11 +55,26 @@ export const MarineIntelligenceDashboard: React.FC<MarineIntelligenceDashboardPr
           <Compass size={17} color="#06b6d4" />
           <span>MARINE INTELLIGENCE</span>
           <span className="workspace-header-badge">GIS & SPATIAL DOMAIN</span>
+          {activeRole && (
+            <span className="workspace-header-badge role-badge" title="Active role layer emphasis">
+              {activeRole.icon} {activeRole.mapEmphasis.badgeText}
+            </span>
+          )}
         </div>
         <div className="workspace-header-meta">
           <span>Sector: Kochi Coastal Waters / Arabian Sea</span>
         </div>
       </div>
+
+      {/* Role Banner with Priorities & Suggested Questions */}
+      {activeRole && onSwitchRole && (
+        <RoleBanner
+          activeRole={activeRole}
+          onSwitchRole={onSwitchRole}
+          onSelectPrompt={onSelectPrompt}
+          compact={true}
+        />
+      )}
 
       {/* Main Workspace Body with Map and Overlays */}
       <div className="marine-map-wrapper">

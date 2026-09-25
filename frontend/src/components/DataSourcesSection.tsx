@@ -131,7 +131,7 @@ export const DataSourcesSection: React.FC<DataSourcesSectionProps> = ({
             </span>
           ) : globalStatus === 'LIVE (HYBRID)' ? (
             <span className="mode-badge live-active">
-              <span className="dot-pulse" /> LIVE TELEMETRY ACTIVE
+              <span className="dot-pulse" /> LIVE FORECAST FEED ACTIVE
             </span>
           ) : globalStatus === 'OFFICIAL SNAPSHOT' ? (
             <span className="mode-badge snapshot-active">

@@ -14,6 +14,8 @@ import type {
   OceanData,
   GeospatialData
 } from './services/api';
+import { type RoleConfig, getStoredRole, setStoredRole } from './config/roles';
+import { RoleSelectionModal } from './components/RoleSelectionModal';
 
 interface Message {
   id: string;
@@ -38,7 +40,12 @@ export const App: React.FC = () => {
   const [latestGeospatial, setLatestGeospatial] = useState<GeospatialData | null>(null);
   const [hasQueried, setHasQueried] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [selectedVessel, setSelectedVessel] = useState<string>('motorized_frp_obm');
+  const [activeRole, setActiveRoleState] = useState<RoleConfig>(getStoredRole);
+  const [isRoleModalOpen, setIsRoleModalOpen] = useState<boolean>(() => !localStorage.getItem('orca_user_role'));
+  const [selectedVessel, setSelectedVessel] = useState<string>(() => {
+    const stored = getStoredRole();
+    return stored.defaultVessel || 'motorized_frp_obm';
+  });
   const [selectedLanguage, setSelectedLanguage] = useState<string>('english');
 
   // Lightweight routing initialized from browser pathname (defaults to /chat)
@@ -57,6 +64,27 @@ export const App: React.FC = () => {
     if (window.location.pathname !== route) {
       window.history.pushState(null, '', route);
     }
+  };
+
+  const handleSelectRole = (role: RoleConfig) => {
+    setActiveRoleState(role);
+    setStoredRole(role.id);
+    if (role.defaultVessel) {
+      setSelectedVessel(role.defaultVessel);
+    }
+    if (role.defaultTab) {
+      navigateTo(role.defaultTab);
+    }
+    setIsRoleModalOpen(false);
+  };
+
+  const handleOpenRoleModal = () => {
+    setIsRoleModalOpen(true);
+  };
+
+  const handleSelectPrompt = (prompt: string) => {
+    navigateTo('/chat');
+    handleSendMessage(prompt);
   };
 
   // Synchronize with browser back/forward buttons
@@ -183,6 +211,8 @@ export const App: React.FC = () => {
         sectorName="Kochi Coastal Sector, Kerala"
         latestResponse={effectiveLatestResponse}
         hasQueried={hasQueried}
+        activeRole={activeRole}
+        onSwitchRole={handleOpenRoleModal}
       />
 
       {/* Persistent Shell Layout: Sidebar + Active Workspace */}
@@ -191,6 +221,8 @@ export const App: React.FC = () => {
           activeRoute={activeRoute}
           onNavigate={navigateTo}
           systemHealthy={systemHealthy}
+          activeRole={activeRole}
+          onSwitchRole={handleOpenRoleModal}
         />
 
         {/* Dynamic Workspace Container */}
@@ -209,17 +241,23 @@ export const App: React.FC = () => {
               onLanguageChange={setSelectedLanguage}
               onNavigateToMarine={() => navigateTo('/marine')}
               onNavigateToRoute={() => navigateTo('/route')}
+              activeRole={activeRole}
+              onSwitchRole={handleOpenRoleModal}
             />
           )}
 
           {activeRoute === '/marine' && (
             <MarineIntelligenceDashboard
+              key={activeRole?.id}
               vesselLocation={vesselLocation}
               nearestPfz={nearestPfz}
               spatialLayers={spatialLayers}
               transitRoute={effectiveLatestResponse?.transit_route}
               onSelectPfz={(pfz) => setNearestPfz(pfz)}
               onNavigateToRoute={() => navigateTo('/route')}
+              activeRole={activeRole}
+              onSwitchRole={handleOpenRoleModal}
+              onSelectPrompt={handleSelectPrompt}
             />
           )}
 
@@ -233,6 +271,9 @@ export const App: React.FC = () => {
               onVesselChange={setSelectedVessel}
               onNavigateToChat={() => navigateTo('/chat')}
               onSelectPfz={(pfz) => setNearestPfz(pfz)}
+              activeRole={activeRole}
+              onSwitchRole={handleOpenRoleModal}
+              onSelectPrompt={handleSelectPrompt}
             />
           )}
 
@@ -240,10 +281,22 @@ export const App: React.FC = () => {
             <DataEvidenceDashboard
               latestResponse={effectiveLatestResponse}
               hasQueried={hasQueried}
+              activeRole={activeRole}
+              onSwitchRole={handleOpenRoleModal}
+              onSelectPrompt={handleSelectPrompt}
             />
           )}
         </main>
       </div>
+
+      {/* Role Selection Modal */}
+      <RoleSelectionModal
+        isOpen={isRoleModalOpen}
+        activeRole={activeRole}
+        onSelectRole={handleSelectRole}
+        onClose={() => setIsRoleModalOpen(false)}
+        canClose={!!localStorage.getItem('orca_user_role')}
+      />
     </div>
   );
 };

@@ -1,16 +1,15 @@
 import React from 'react';
 import { Compass, Shield, AlertTriangle, Radio } from 'lucide-react';
-import {
-  deriveGlobalSourceStatus,
-  type ChatResponse,
-  type GlobalSourceStatus,
-} from '../services/api';
+import { deriveGlobalSourceStatus, type ChatResponse, type GlobalSourceStatus } from '../services/api';
+import type { RoleConfig } from '../config/roles';
 
 interface HeaderProps {
   systemHealthy: boolean;
   sectorName?: string;
   latestResponse?: ChatResponse | null;
   hasQueried?: boolean;
+  activeRole?: RoleConfig;
+  onSwitchRole?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -18,6 +17,8 @@ export const Header: React.FC<HeaderProps> = ({
   sectorName = 'Kochi Coastal Sector, Kerala',
   latestResponse,
   hasQueried = false,
+  activeRole,
+  onSwitchRole,
 }) => {
   const globalStatus: GlobalSourceStatus = deriveGlobalSourceStatus(latestResponse, hasQueried);
 
@@ -34,6 +35,20 @@ export const Header: React.FC<HeaderProps> = ({
       </div>
 
       <div className="header-status-pills">
+        {/* Role Selector Pill */}
+        {activeRole && (
+          <button
+            type="button"
+            className="pill-badge role-header-pill"
+            onClick={onSwitchRole}
+            title={`Active Persona: ${activeRole.displayName}. Click to switch role.`}
+          >
+            <span className="role-header-icon">{activeRole.icon}</span>
+            <span className="role-header-name">{activeRole.displayName}</span>
+            <span className="role-header-switch-tag">Switch</span>
+          </button>
+        )}
+
         <div className="pill-badge sector">
           <Shield size={13} />
           <span>Sector: {sectorName}</span>
@@ -46,7 +61,7 @@ export const Header: React.FC<HeaderProps> = ({
             <span>SOURCE: READY</span>
           </div>
         ) : globalStatus === 'LIVE (HYBRID)' ? (
-          <div className="pill-badge live-source-badge" title="Live Open-Meteo telemetry active for Weather and Marine layers + Official INCOIS snapshot">
+          <div className="pill-badge live-source-badge" title="Live Open-Meteo forecast feeds active for Weather and Marine layers + Official INCOIS snapshot">
             <Radio size={13} className="live-icon-pulse" />
             <span>SOURCE: LIVE (HYBRID)</span>
           </div>

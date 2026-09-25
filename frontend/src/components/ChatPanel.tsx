@@ -2,8 +2,6 @@ import React, { useState, useRef, useEffect } from 'react';
 import {
   Send,
   Bot,
-  ShieldCheck,
-  ShieldAlert,
   Anchor,
   Languages,
   ChevronDown,
@@ -11,10 +9,23 @@ import {
   Navigation,
   Sparkles,
   Database,
-  MapPin
+  MapPin,
+  Users
 } from 'lucide-react';
 import type { ChatResponse } from '../services/api';
 import { DataSourcesSection } from './DataSourcesSection';
+import type { RoleConfig } from '../config/roles';
+import { getRoleChatExperience } from '../config/roleExperience';
+import type { VisualComponentType, MetricType } from '../config/roleExperience';
+import {
+  RiskIndicator,
+  FishingWindowChart,
+  WeatherTrendChart,
+  WaveTrendChart,
+  MarineConditionsChart,
+  InlineRouteCard,
+  InlinePfzCard
+} from './visualizations';
 
 interface Message {
   id: string;
@@ -37,6 +48,8 @@ interface ChatPanelProps {
   onLanguageChange?: (lang: string) => void;
   onNavigateToMarine?: () => void;
   onNavigateToRoute?: () => void;
+  activeRole?: RoleConfig;
+  onSwitchRole?: () => void;
 }
 
 const QUICK_PROMPTS = [
@@ -71,10 +84,268 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   onLanguageChange,
   onNavigateToMarine,
   onNavigateToRoute,
+  activeRole,
+  onSwitchRole,
 }) => {
   const [inputText, setInputText] = useState('');
   const [localVessel, setLocalVessel] = useState<string>(selectedVessel);
   const [localLanguage, setLocalLanguage] = useState<string>(selectedLanguage);
+
+  const roleExp = getRoleChatExperience(activeRole?.id);
+
+  const effectiveQuickPrompts = (activeRole?.suggestedQuestions && activeRole.suggestedQuestions.length > 0)
+    ? activeRole.suggestedQuestions
+    : roleExp.suggestedFollowUps && roleExp.suggestedFollowUps.length > 0
+      ? roleExp.suggestedFollowUps
+      : QUICK_PROMPTS;
+
+  const isVisuallyRelevant = (payload?: ChatResponse): boolean => {
+    if (!payload) return false;
+    const nonVisualIntents = [
+      'greeting',
+      'chitchat',
+      'marine_news_unsupported',
+      'general_query',
+      'help'
+    ];
+    if (nonVisualIntents.includes(payload.intent)) {
+      return false;
+    }
+    return Boolean(
+      payload.weather ||
+      payload.ocean ||
+      payload.risk ||
+      payload.route_risk ||
+      payload.temporal_comparison ||
+      payload.transit_route ||
+      payload.spatial_features?.nearest_pfz ||
+      payload.geospatial?.nearest_pfz ||
+      (payload.candidate_pfzs && payload.candidate_pfzs.length > 0)
+    );
+  };
+
+  const renderPriorityMetrics = (payload?: ChatResponse, priorityList: MetricType[] = []) => {
+    if (!payload || !isVisuallyRelevant(payload)) return null;
+
+    const weather = payload.weather;
+    const ocean = payload.ocean;
+    const risk = payload.risk;
+    const route = payload.transit_route;
+    const nearestPfz = payload.spatial_features?.nearest_pfz || payload.geospatial?.nearest_pfz;
+
+    const metricElements: React.ReactNode[] = [];
+
+    for (const metric of priorityList) {
+      if (metric === 'wave' && ocean?.wave_height_m != null) {
+        metricElements.push(
+          <div key="wave" className="chat-priority-pill">
+            <span className="chat-priority-pill-label">Wave</span>
+            <span className="chat-priority-pill-val">{ocean.wave_height_m} m</span>
+          </div>
+        );
+      } else if (metric === 'sea_state' && ocean?.sea_state) {
+        metricElements.push(
+          <div key="sea_state" className="chat-priority-pill">
+            <span className="chat-priority-pill-label">Sea</span>
+            <span className="chat-priority-pill-val" style={{ textTransform: 'capitalize' }}>{ocean.sea_state}</span>
+          </div>
+        );
+      } else if (metric === 'wind' && weather?.wind_speed_kmh != null) {
+        metricElements.push(
+          <div key="wind" className="chat-priority-pill">
+            <span className="chat-priority-pill-label">Wind</span>
+            <span className="chat-priority-pill-val">{weather.wind_speed_kmh} km/h</span>
+          </div>
+        );
+      } else if (metric === 'rain' && weather?.rain_probability != null) {
+        metricElements.push(
+          <div key="rain" className="chat-priority-pill">
+            <span className="chat-priority-pill-label">Rain</span>
+            <span className="chat-priority-pill-val">{weather.rain_probability}%</span>
+          </div>
+        );
+      } else if (metric === 'risk' && risk) {
+        metricElements.push(
+          <div key="risk" className="chat-priority-pill">
+            <span className="chat-priority-pill-label">Risk</span>
+            <span
+              className="chat-priority-pill-val"
+              style={{ color: risk.risk_level === 'LOW' ? '#34d399' : risk.risk_level === 'MODERATE' ? '#fbbf24' : '#f87171' }}
+            >
+              {risk.risk_level} ({risk.risk_score.toFixed(1)})
+            </span>
+          </div>
+        );
+      } else if (metric === 'sst' && ocean?.sst_c != null) {
+        metricElements.push(
+          <div key="sst" className="chat-priority-pill">
+            <span className="chat-priority-pill-label">SST</span>
+            <span className="chat-priority-pill-val">{ocean.sst_c} °C</span>
+          </div>
+        );
+      } else if (metric === 'tide' && ocean?.tide) {
+        metricElements.push(
+          <div key="tide" className="chat-priority-pill">
+            <span className="chat-priority-pill-label">Tide</span>
+            <span className="chat-priority-pill-val" style={{ textTransform: 'capitalize' }}>
+              {ocean.tide.includes('(') ? ocean.tide.split('(')[0].trim() : ocean.tide}
+            </span>
+          </div>
+        );
+      } else if (metric === 'pfz_distance' && nearestPfz?.distance_km != null) {
+        metricElements.push(
+          <div key="pfz" className="chat-priority-pill">
+            <span className="chat-priority-pill-label">Nearest PFZ</span>
+            <span className="chat-priority-pill-val">{nearestPfz.distance_km.toFixed(1)} km</span>
+          </div>
+        );
+      } else if (metric === 'fuel' && route?.estimated_fuel_litres != null && route.estimated_fuel_litres > 0) {
+        metricElements.push(
+          <div key="fuel" className="chat-priority-pill">
+            <span className="chat-priority-pill-label">Est. Fuel</span>
+            <span className="chat-priority-pill-val">~{route.estimated_fuel_litres.toFixed(1)} L</span>
+          </div>
+        );
+      } else if (metric === 'transit_duration' && route?.estimated_duration_hours != null) {
+        metricElements.push(
+          <div key="duration" className="chat-priority-pill">
+            <span className="chat-priority-pill-label">Duration</span>
+            <span className="chat-priority-pill-val">{route.estimated_duration_hours.toFixed(1)} hrs</span>
+          </div>
+        );
+      }
+    }
+
+    if (metricElements.length === 0) return null;
+
+    return (
+      <div className="chat-role-priority-strip">
+        {metricElements}
+      </div>
+    );
+  };
+
+  const renderOrderedVisualizations = (
+    payload: ChatResponse,
+    visualOrder: VisualComponentType[],
+    roleExpConfig: any
+  ) => {
+    if (!isVisuallyRelevant(payload)) return null;
+
+    const weather = payload.weather;
+    const ocean = payload.ocean;
+    const risk = payload.risk;
+    const routeRisk = payload.route_risk;
+    const route = payload.transit_route;
+    const temporal = payload.temporal_comparison;
+    const nearestPfz = payload.spatial_features?.nearest_pfz || payload.geospatial?.nearest_pfz;
+    const candidatePfzs = payload.candidate_pfzs || payload.context?.candidate_pfzs;
+
+    const rendered: React.ReactNode[] = [];
+    const seen = new Set<string>();
+
+    for (const compType of visualOrder) {
+      if (seen.has(compType)) continue;
+
+      if (compType === 'fishing_window') {
+        if (temporal) {
+          seen.add(compType);
+          rendered.push(
+            <FishingWindowChart
+              key="fishing_window"
+              temporalComparison={temporal}
+              weather={weather}
+              ocean={ocean}
+              risk={risk}
+            />
+          );
+        }
+      } else if (compType === 'marine_conditions') {
+        if (weather || ocean) {
+          seen.add(compType);
+          rendered.push(
+            <MarineConditionsChart
+              key="marine_conditions"
+              weather={weather}
+              ocean={ocean}
+              temporalComparison={temporal}
+              roleExperience={roleExpConfig}
+            />
+          );
+        }
+      } else if (compType === 'wave_trend') {
+        if (ocean || temporal) {
+          seen.add(compType);
+          rendered.push(
+            <WaveTrendChart
+              key="wave_trend"
+              ocean={ocean}
+              temporalComparison={temporal}
+              selectedVessel={localVessel}
+            />
+          );
+        }
+      } else if (compType === 'weather_trend') {
+        if (weather || temporal) {
+          seen.add(compType);
+          rendered.push(
+            <WeatherTrendChart
+              key="weather_trend"
+              weather={weather}
+              temporalComparison={temporal}
+            />
+          );
+        }
+      } else if (compType === 'risk_indicator') {
+        if (risk || routeRisk) {
+          seen.add(compType);
+          rendered.push(
+            <RiskIndicator
+              key="risk_indicator"
+              risk={risk}
+              routeRisk={routeRisk}
+              roleExperience={roleExpConfig}
+              density={roleExpConfig.informationDensity}
+            />
+          );
+        }
+      } else if (compType === 'route_corridor') {
+        if (route) {
+          seen.add(compType);
+          rendered.push(
+            <InlineRouteCard
+              key="route_corridor"
+              route={route}
+              roleExperience={roleExpConfig}
+              onNavigateToRoute={onNavigateToRoute}
+            />
+          );
+        }
+      } else if (compType === 'pfz_card') {
+        if (nearestPfz || (candidatePfzs && candidatePfzs.length > 0)) {
+          seen.add(compType);
+          rendered.push(
+            <InlinePfzCard
+              key="pfz_card"
+              nearestPfz={nearestPfz}
+              candidatePfzs={candidatePfzs}
+              roleExperience={roleExpConfig}
+              onSelectPfz={onSelectPfz}
+              onNavigateToMarine={onNavigateToMarine}
+            />
+          );
+        }
+      }
+    }
+
+    if (rendered.length === 0) return null;
+
+    return (
+      <div className="visualizations-container">
+        {rendered}
+      </div>
+    );
+  };
 
   // Secondary Collapsible Drawers (collapsed by default to preserve chat height)
   const [isPromptsOpen, setIsPromptsOpen] = useState<boolean>(false);
@@ -83,11 +354,29 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   const [expandedMl, setExpandedMl] = useState<Record<string, boolean>>({});
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const prevLoadingRef = useRef<boolean>(isLoading);
 
   // Auto-scroll strictly to newest message in message feed
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isLoading]);
+
+  // Auto-focus chat input after message submission completes
+  useEffect(() => {
+    if (prevLoadingRef.current && !isLoading) {
+      const active = document.activeElement;
+      const isOtherInteractive = active && active !== document.body && active !== inputRef.current && (
+        active.tagName === 'INPUT' || active.tagName === 'SELECT' || active.tagName === 'TEXTAREA'
+      );
+      if (!isOtherInteractive) {
+        requestAnimationFrame(() => {
+          inputRef.current?.focus();
+        });
+      }
+    }
+    prevLoadingRef.current = isLoading;
+  }, [isLoading]);
 
   const handleVesselSelect = (v: string) => {
     setLocalVessel(v);
@@ -235,8 +524,27 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         </div>
       </div>
 
-      {/* 2. Always-Visible Control Bar: Vessel & Language Selectors */}
+      {/* 2. Always-Visible Control Bar: Role, Vessel & Language Selectors */}
       <div className="chat-controls-bar">
+        {/* Role Persona Selector */}
+        {activeRole && onSwitchRole && (
+          <div className="control-group">
+            <span className="control-label">
+              <Users size={12} color="#06b6d4" /> Role:
+            </span>
+            <button
+              type="button"
+              className="control-pill role-pill active"
+              onClick={onSwitchRole}
+              title={`Active Persona: ${activeRole.displayName}. Click to switch role.`}
+            >
+              <span>{activeRole.icon}</span>
+              <span>{activeRole.shortName}</span>
+              <span className="role-pill-switch-tag">Switch</span>
+            </button>
+          </div>
+        )}
+
         {/* Vessel Selector */}
         <div className="control-group">
           <span className="control-label">
@@ -328,10 +636,10 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       {isPromptsOpen && (
         <div className="secondary-drawer-panel">
           <div style={{ fontSize: '0.7rem', color: '#94a3b8', marginBottom: '6px', fontWeight: 600 }}>
-            CLICK TO ASK ORCA:
+            {activeRole ? `SUGGESTED QUESTIONS FOR ${activeRole.displayName.toUpperCase()}:` : 'CLICK TO ASK ORCA:'}
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            {QUICK_PROMPTS.map((prompt, idx) => (
+            {effectiveQuickPrompts.map((prompt, idx) => (
               <button
                 key={idx}
                 type="button"
@@ -389,10 +697,10 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       {messages.length <= 1 && !isPromptsOpen && (
         <div className="initial-prompts-strip">
           <div style={{ fontSize: '0.68rem', color: '#94a3b8', marginBottom: '4px' }}>
-            Suggested questions to get started:
+            {activeRole ? `Suggested questions for ${activeRole.displayName}:` : 'Suggested questions to get started:'}
           </div>
           <div className="quick-chips-row">
-            {QUICK_PROMPTS.map((prompt, idx) => (
+            {effectiveQuickPrompts.map((prompt, idx) => (
               <button
                 key={idx}
                 type="button"
@@ -411,9 +719,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       <div className="chat-messages">
         {messages.map((msg) => {
           const isUser = msg.sender === 'user';
-          const msgWeather = msg.responsePayload?.weather;
-          const msgOcean = msg.responsePayload?.ocean;
-          const msgRisk = msg.responsePayload?.risk;
           const msgRoute = msg.responsePayload?.transit_route;
 
           return (
@@ -432,71 +737,28 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                     <div className="assistant-title">
                       <Bot size={14} color="#06b6d4" />
                       <span>ORCA Advisor</span>
+                      {activeRole && (
+                        <span className="role-chat-badge" title={`Active Persona: ${activeRole.displayName}`}>
+                          <span>{activeRole.icon}</span>
+                          <span>{roleExp.badgeLabel}</span>
+                        </span>
+                      )}
                     </div>
                     <span style={{ fontSize: '0.65rem', color: '#64748b' }}>{msg.timestamp}</span>
                   </div>
 
-                  {/* Compact Risk Badge (Supporting Context) */}
-                  {msgRisk && (
-                    <div className={`risk-badge-compact ${msgRisk.risk_level}`}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                        {msgRisk.risk_level === 'LOW' ? (
-                          <ShieldCheck size={14} />
-                        ) : (
-                          <ShieldAlert size={14} />
-                        )}
-                        <span>ENVIRONMENTAL CONDITION RISK: {msgRisk.risk_level}</span>
-                      </div>
-                      <span style={{ fontSize: '0.72rem', opacity: 0.9 }}>
-                        Score: {msgRisk.risk_score}/10
-                      </span>
-                    </div>
-                  )}
-
-                  {/* Primary Conversational Text */}
+                  {/* 1. Primary Conversational Text */}
                   <div className="message-text">
                     {renderProse(msg.text)}
                   </div>
 
-                  {/* Compact Telemetry Strip (Supporting Context) */}
-                  {(msgWeather || msgOcean) && (
-                    <div className="compact-telemetry-strip">
-                      {msgWeather && (
-                        <div className="telemetry-pill">
-                          <span className="telemetry-pill-label">Wind</span>
-                          <span>{msgWeather.wind_speed_kmh} km/h</span>
-                        </div>
-                      )}
-                      {msgWeather && (
-                        <div className="telemetry-pill">
-                          <span className="telemetry-pill-label">Rain</span>
-                          <span>{msgWeather.rain_probability}%</span>
-                        </div>
-                      )}
-                      {msgOcean && (
-                        <div className="telemetry-pill">
-                          <span className="telemetry-pill-label">Wave</span>
-                          <span>{msgOcean.wave_height_m} m</span>
-                        </div>
-                      )}
-                      {msgOcean && (
-                        <div className="telemetry-pill">
-                          <span className="telemetry-pill-label">Sea</span>
-                          <span style={{ textTransform: 'capitalize' }}>{msgOcean.sea_state}</span>
-                        </div>
-                      )}
-                      {msgOcean?.tide && (
-                        <div className="telemetry-pill">
-                          <span className="telemetry-pill-label">Sea-Level Trend</span>
-                          <span style={{ textTransform: 'capitalize' }}>
-                            {msgOcean.tide.includes('(') ? msgOcean.tide.split('(')[0].trim() : msgOcean.tide}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                  )}
+                  {/* 2. Role-Prioritized Key Metrics Strip */}
+                  {msg.responsePayload && renderPriorityMetrics(msg.responsePayload, roleExp.priorityMetrics)}
 
-                  {/* Malayalam Advisory Drawer (if present) */}
+                  {/* 3. Role-Prioritized Ordered Visualizations */}
+                  {msg.responsePayload && renderOrderedVisualizations(msg.responsePayload, roleExp.visualOrder, roleExp)}
+
+                  {/* 4. Malayalam Advisory Drawer (if present) */}
                   {msg.responsePayload?.answer_ml && (
                     <div className="malayalam-advisory-container">
                       <button
@@ -518,8 +780,11 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                     </div>
                   )}
 
-                  {/* Contextual Conversational Action Buttons */}
+                  {/* 5. Contextual Conversational Action Buttons */}
                   {(() => {
+                    if (msg.responsePayload?.intent === 'marine_update') {
+                      return null;
+                    }
                     const cands = msg.responsePayload?.candidate_pfzs || msg.responsePayload?.context?.candidate_pfzs;
                     const candCount = cands && cands.length > 0 ? cands.length : 0;
                     const nearestPfz = msg.responsePayload?.spatial_features?.nearest_pfz || msg.responsePayload?.geospatial?.nearest_pfz;
@@ -565,6 +830,26 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                       </div>
                     );
                   })()}
+
+                  {/* 6. Role-Specific Suggested Follow-Up Questions */}
+                  {roleExp.suggestedFollowUps && roleExp.suggestedFollowUps.length > 0 && (
+                    <div className="chat-follow-up-strip">
+                      <span className="follow-up-hint">Suggested follow-ups for {activeRole?.shortName || 'this role'}:</span>
+                      <div className="follow-up-chips-row">
+                        {roleExp.suggestedFollowUps.map((fu, fuIdx) => (
+                          <button
+                            key={fuIdx}
+                            type="button"
+                            className="follow-up-chip-btn"
+                            onClick={() => handleQuickPrompt(fu)}
+                            disabled={isLoading}
+                          >
+                            👉 {fu}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -590,9 +875,10 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       {/* 5. Fixed Chat Input Bar at Bottom */}
       <form className="chat-input-bar" onSubmit={handleSubmit}>
         <input
+          ref={inputRef}
           type="text"
           className="chat-input-field"
-          placeholder="Ask ORCA about marine conditions, safety, or routes..."
+          placeholder={roleExp.preferredTerminology.promptPlaceholder || "Ask ORCA about marine conditions, safety, or routes..."}
           value={inputText}
           onChange={(e) => setInputText(e.target.value)}
           disabled={isLoading}

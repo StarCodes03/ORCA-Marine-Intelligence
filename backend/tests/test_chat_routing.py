@@ -670,16 +670,19 @@ def test_temporal_comparison_internal_consistency_when_score_delta_zero():
 
 
 def test_marine_news_queries_unsupported_routing():
-    """Verify that marine-news inquiries are routed to unsupported capability response,
-    NOT marine_safety, and do NOT fabricate weather, ocean, or geospatial risk data.
+    """Verify that genuine marine-news/incident inquiries (Category A) are routed to
+    unsupported capability response, NOT marine_safety, and do NOT fabricate weather,
+    ocean, or geospatial risk data.
     """
     news_queries = [
         "what is new in the sea news today",
         "any marine news today?",
+        "latest marine breaking news",
+        "any maritime incidents today?",
+        "was there a ship accident today?",
         "what happened in the sea today?",
         "latest marine news",
         "any new ocean news?",
-        "what's happening at sea today?"
     ]
 
     for q in news_queries:
@@ -710,6 +713,114 @@ def test_marine_news_queries_unsupported_routing():
         ans = data["answer"].lower()
         assert "news" in ans
         assert "live marine-news" in ans or "news feed" in ans or "not a live news" in ans or "വാർത്ത" in (data.get("answer_ml") or "")
+
+
+def test_marine_condition_update_queries_routing():
+    """Verify Category B conversational marine condition inquiries:
+    - 'what is new in the sea today'
+    - 'what's happening in the sea today'
+    - 'what's happening out at sea today'
+    - 'what's new with the sea today'
+    - 'tell me what's happening in the sea today'
+    - 'any updates from the sea today'
+
+    Must:
+    1. Route to intent='marine_update'
+    2. Invoke ONLY PlannerAgent, WeatherAgent, OceanAgent, EvidenceAgent
+       (RiskAssessmentAgent and GeospatialAgent MUST NOT be executed)
+    3. Return weather and ocean telemetry, but risk, geospatial, transit_route are None
+    4. Provide the clear disclaimer about not having live news, while giving live forecast conditions
+    5. Contain formatted table with wind, rain, wave, sea state
+    6. Not fabricate news, accidents, or incidents
+    """
+    update_queries = [
+        "what is new in the sea today",
+        "what's happening in the sea today",
+        "what's happening out at sea today",
+        "what's new with the sea today",
+        "tell me what's happening in the sea today",
+        "any updates from the sea today",
+    ]
+
+    for q in update_queries:
+        resp = client.post("/api/chat", json={
+            "message": q,
+            "conversation_id": f"test-update-{abs(hash(q)) % 10000}",
+            "user_latitude": 9.9312,
+            "user_longitude": 76.2673
+        })
+        assert resp.status_code == 200, f"Query '{q}' failed with status {resp.status_code}"
+        data = resp.json()
+
+        assert data["intent"] == "marine_update", f"Query '{q}' routed to intent '{data['intent']}'"
+        assert data["agent_trace"] == ["PlannerAgent", "WeatherAgent", "OceanAgent", "EvidenceAgent"], (
+            f"Query '{q}' invoked agents: {data['agent_trace']}"
+        )
+
+        # Weather and ocean telemetry MUST be present
+        assert data["weather"] is not None
+        assert data["weather"]["wind_speed_kmh"] is not None
+        assert data["ocean"] is not None
+        assert data["ocean"]["wave_height_m"] is not None
+
+        # Risk, Geospatial, Transit Route MUST be None
+        assert data["risk"] is None
+        assert data["geospatial"] is None
+        assert data["transit_route"] is None
+        assert data["spatial_features"] is None
+
+        # Location defaults to Kochi or user context
+        assert data["location"] is not None
+        assert data["location"]["name"] == "Kochi"
+
+        # Answer must contain the honest disclaimer and live condition metrics
+        ans = data["answer"]
+        assert "don't have a live marine-news feed" in ans or "do not have a live marine-news feed" in ans
+        assert "current marine conditions from the live forecast" in ans
+        assert "Marine Update" in ans
+        assert "Wind" in ans
+        assert "Wave" in ans
+        assert "Sea State" in ans
+
+
+def test_four_key_queries_distinction():
+    """Verify exact behavior of the 4 key test queries required by user:
+    1. 'what is new in the sea today' -> marine_update with live forecast & news disclaimer
+    2. 'any marine news today?' -> unsupported with unsupported_news scope notice
+    3. 'what\'s the weather today?' -> weather_query
+    4. 'is it safe to go fishing today?' -> marine_safety with full collective
+    """
+    sid = "test-four-queries"
+
+    # 1. 'what is new in the sea today'
+    r1 = client.post("/api/chat", json={"message": "what is new in the sea today", "conversation_id": sid + "-1"}).json()
+    assert r1["intent"] == "marine_update"
+    assert r1["agent_trace"] == ["PlannerAgent", "WeatherAgent", "OceanAgent", "EvidenceAgent"]
+    assert "don't have a live marine-news feed" in r1["answer"]
+    assert r1["weather"] is not None
+    assert r1["ocean"] is not None
+    assert r1["risk"] is None
+
+    # 2. 'any marine news today?'
+    r2 = client.post("/api/chat", json={"message": "any marine news today?", "conversation_id": sid + "-2"}).json()
+    assert r2["intent"] == "unsupported"
+    assert r2["agent_trace"] == ["PlannerAgent", "EvidenceAgent"]
+    assert "Operational Scope Notice" in r2["answer"]
+    assert r2["weather"] is None
+    assert r2["ocean"] is None
+
+    # 3. 'what\'s the weather today?'
+    r3 = client.post("/api/chat", json={"message": "what's the weather today?", "conversation_id": sid + "-3"}).json()
+    assert r3["intent"] == "weather_query"
+    assert "WeatherAgent" in r3["agent_trace"]
+    assert r3["weather"] is not None
+
+    # 4. 'is it safe to go fishing today?'
+    r4 = client.post("/api/chat", json={"message": "is it safe to go fishing today?", "conversation_id": sid + "-4"}).json()
+    assert r4["intent"] == "marine_safety"
+    assert "RiskAssessmentAgent" in r4["agent_trace"]
+    assert r4["risk"] is not None
+    assert r4["risk"]["risk_level"] in ["LOW", "MODERATE", "HIGH", "CRITICAL"]
 
 
 def test_cold_start_referential_queries_request_clarification():
